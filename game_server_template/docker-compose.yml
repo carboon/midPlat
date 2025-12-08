@@ -1,0 +1,14 @@
+version: '3.8'
+
+services:
+  game-server:
+    build: .
+    ports:
+      - "8080:8080"
+    environment:
+      - MATCHMAKER_URL=http://host.docker.internal:8000
+      - ROOM_NAME=AI游戏房间
+      - ROOM_PASSWORD=123456
+    volumes:
+      - .:/usr/src/app
+      - /usr/src/app/node_modules

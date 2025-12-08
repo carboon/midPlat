@@ -1,0 +1,89 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>多人点击计数游戏</title>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      text-align: center;
+      margin-top: 50px;
+      background-color: #f0f0f0;
+    }
+    
+    #clickButton {
+      padding: 20px 40px;
+      font-size: 24px;
+      background-color: #4CAF50;
+      color: white;
+      border: none;
+      border-radius: 10px;
+      cursor: pointer;
+      transition: background-color 0.3s;
+    }
+    
+    #clickButton:hover {
+      background-color: #45a049;
+    }
+    
+    #clickButton:active {
+      transform: scale(0.98);
+    }
+    
+    #countDisplay {
+      font-size: 48px;
+      margin: 30px 0;
+      color: #333;
+    }
+    
+    #status {
+      font-size: 18px;
+      color: #666;
+      margin: 20px 0;
+    }
+  </style>
+</head>
+<body>
+  <h1>多人点击计数游戏</h1>
+  <div id="status">正在连接...</div>
+  <div id="countDisplay">0</div>
+  <button id="clickButton" disabled>点击我!</button>
+  
+  <!-- 引入 Socket.IO 客户端库 -->
+  <script src="/socket.io/socket.io.js"></script>
+  <script>
+    // 连接到服务器
+    const socket = io();
+    
+    // 获取 DOM 元素
+    const clickButton = document.getElementById('clickButton');
+    const countDisplay = document.getElementById('countDisplay');
+    const statusDiv = document.getElementById('status');
+    
+    // 连接成功事件
+    socket.on('connect', () => {
+      statusDiv.textContent = '已连接到服务器';
+      statusDiv.style.color = 'green';
+      clickButton.disabled = false;
+    });
+    
+    // 连接断开事件
+    socket.on('disconnect', () => {
+      statusDiv.textContent = '与服务器断开连接';
+      statusDiv.style.color = 'red';
+      clickButton.disabled = true;
+    });
+    
+    // 接收游戏状态更新
+    socket.on('gameState', (gameState) => {
+      countDisplay.textContent = gameState.clickCount;
+    });
+    
+    // 点击按钮事件
+    clickButton.addEventListener('click', () => {
+      socket.emit('click');
+    });
+  </script>
+</body>
+</html>
