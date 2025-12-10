@@ -4,6 +4,7 @@ import 'package:provider/provider.dart';
 import '../providers/game_provider.dart';
 import '../providers/room_provider.dart';
 import '../widgets/custom_app_bar.dart';
+import '../models/room.dart';
 
 class GameScreen extends StatefulWidget {
   const GameScreen({super.key});
@@ -40,7 +41,7 @@ class _GameScreenState extends State<GameScreen> {
           },
         ),
       )
-      ..loadRequest(Uri.parse('http://${room?.id ?? 'localhost'}:8080'));
+      ..loadRequest(Uri.parse('http://${room?.ip ?? 'localhost'}:${room?.port ?? 8080}'));
   }
 
   @override

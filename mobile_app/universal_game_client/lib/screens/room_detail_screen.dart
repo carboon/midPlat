@@ -3,6 +3,7 @@ import 'package:provider/provider.dart';
 import '../providers/room_provider.dart';
 import '../widgets/custom_app_bar.dart';
 import '../routes/app_routes.dart';
+import '../models/room.dart';
 
 class RoomDetailScreen extends StatelessWidget {
   const RoomDetailScreen({super.key});
@@ -29,11 +30,15 @@ class RoomDetailScreen extends StatelessWidget {
             const SizedBox(height: 10),
             Text('房间ID: ${room.id}', style: const TextStyle(fontSize: 18)),
             const SizedBox(height: 10),
+            Text('IP地址: ${room.ip}', style: const TextStyle(fontSize: 18)),
+            const SizedBox(height: 10),
+            Text('端口: ${room.port}', style: const TextStyle(fontSize: 18)),
+            const SizedBox(height: 10),
             Text('玩家数量: ${room.playerCount}/${room.maxPlayers}', style: const TextStyle(fontSize: 18)),
             const SizedBox(height: 10),
-            Text('状态: ${room.status}', style: const TextStyle(fontSize: 18)),
+            Text('最后心跳: ${room.lastHeartbeat}', style: const TextStyle(fontSize: 18)),
             const SizedBox(height: 10),
-            Text('创建时间: ${room.createdAt}', style: const TextStyle(fontSize: 18)),
+            Text('运行时间: ${room.uptime}秒', style: const TextStyle(fontSize: 18)),
             const Spacer(),
             Center(
               child: ElevatedButton(
@@ -48,45 +53,11 @@ class RoomDetailScreen extends StatelessWidget {
   }
 
   void _joinRoom(BuildContext context) {
-    // 如果房间有密码，先弹出密码输入框
-    final room = Provider.of<RoomProvider>(context, listen: false).currentRoom;
-    if (room != null && room.password.isNotEmpty) {
-      _showPasswordDialog(context);
-    } else {
-      // 直接进入游戏
-      Navigator.pushNamed(context, AppRoutes.game);
-    }
+    // 直接进入游戏，不再检查密码
+    Navigator.pushNamed(context, AppRoutes.game);
   }
 
   void _showPasswordDialog(BuildContext context) {
-    final room = Provider.of<RoomProvider>(context, listen: false).currentRoom;
-    if (room == null) return;
-
-    showDialog<String>(
-      context: context,
-      builder: (BuildContext context) {
-        return AlertDialog(
-          title: const Text('输入房间密码'),
-          content: TextField(
-            obscureText: true,
-            decoration: const InputDecoration(hintText: '请输入密码'),
-            onSubmitted: (value) {
-              Navigator.of(context).pop(value);
-            },
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.of(context).pop(),
-              child: const Text('取消'),
-            ),
-          ],
-        );
-      },
-    ).then((password) {
-      if (password != null) {
-        // 验证密码并进入游戏
-        Navigator.pushNamed(context, AppRoutes.game);
-      }
-    });
+    // 不再需要密码对话框
   }
 }

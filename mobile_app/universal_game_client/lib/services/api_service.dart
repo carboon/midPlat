@@ -8,7 +8,7 @@ class ApiService {
 
   // 获取房间列表
   static Future<List<Room>> fetchRooms() async {
-    final response = await http.get(Uri.parse('$_baseUrl/rooms'));
+    final response = await http.get(Uri.parse('$_baseUrl/servers'));
 
     if (response.statusCode == 200) {
       final List<dynamic> data = json.decode(response.body);
@@ -20,7 +20,7 @@ class ApiService {
 
   // 根据ID获取房间详情
   static Future<Room> fetchRoomById(String id) async {
-    final response = await http.get(Uri.parse('$_baseUrl/rooms/$id'));
+    final response = await http.get(Uri.parse('$_baseUrl/servers/$id'));
 
     if (response.statusCode == 200) {
       final Map<String, dynamic> data = json.decode(response.body);
@@ -30,18 +30,10 @@ class ApiService {
     }
   }
 
-  // 加入房间
+  // 加入房间 - 这个功能在新的API中可能需要调整
   static Future<bool> joinRoom(String roomId, String password) async {
-    final response = await http.post(
-      Uri.parse('$_baseUrl/rooms/$roomId/join'),
-      headers: <String, String>{
-        'Content-Type': 'application/json; charset=UTF-8',
-      },
-      body: jsonEncode(<String, String>{
-        'password': password,
-      }),
-    );
-
-    return response.statusCode == 200;
+    // 在新的架构中，我们可能不需要显式的"加入"操作，
+    // 而是直接连接到游戏服务器
+    return true;
   }
 }

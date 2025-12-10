@@ -70,11 +70,12 @@ async function sendHeartbeat() {
     });
     
     // 上报心跳到撮合服务
-    await axios.post(`${MATCHMAKER_URL}/rooms`, {
+    await axios.post(`${MATCHMAKER_URL}/register`, {
       ip: ipAddress,
       port: PORT,
       name: ROOM_NAME,
-      password: ROOM_PASSWORD
+      max_players: 20,
+      current_players: 0
     });
     
     console.log(`心跳上报成功: ${ipAddress}:${PORT} (${ROOM_NAME})`);

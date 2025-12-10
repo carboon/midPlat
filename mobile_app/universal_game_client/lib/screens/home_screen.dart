@@ -5,6 +5,7 @@ import '../services/api_service.dart';
 import '../widgets/room_card.dart';
 import '../widgets/custom_app_bar.dart';
 import '../routes/app_routes.dart';
+import '../models/room.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
