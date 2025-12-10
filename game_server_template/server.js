@@ -57,17 +57,8 @@ async function sendHeartbeat() {
     // 获取本机IP地址
     const os = require('os');
     const networkInterfaces = os.networkInterfaces();
-    let ipAddress = '127.0.0.1';
-    
-    // 查找非内部IP地址
-    Object.keys(networkInterfaces).forEach(interfaceName => {
-      const interfaces = networkInterfaces[interfaceName];
-      interfaces.forEach(interface => {
-        if (!interface.internal && interface.family === 'IPv4') {
-          ipAddress = interface.address;
-        }
-      });
-    });
+    // 强制使用 localhost 以确保在本地开发环境正常工作
+    let ipAddress = 'localhost';
     
     // 上报心跳到撮合服务
     await axios.post(`${MATCHMAKER_URL}/register`, {

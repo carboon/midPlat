@@ -22,6 +22,11 @@ class _GameScreenState extends State<GameScreen> {
     
     // 获取当前房间信息
     final room = Provider.of<RoomProvider>(context, listen: false).currentRoom;
+    final url = 'http://${room?.ip ?? 'localhost'}:${room?.port ?? 8080}';
+    
+    print('=== GameScreen 初始化 ===');
+    print('房间信息: ${room?.name}');
+    print('加载 URL: $url');
     
     // 初始化WebView控制器
     _controller = WebViewController()
@@ -29,19 +34,31 @@ class _GameScreenState extends State<GameScreen> {
       ..setNavigationDelegate(
         NavigationDelegate(
           onPageStarted: (String url) {
+            print('页面开始加载: $url');
             Provider.of<GameProvider>(context, listen: false).setLoading(true);
           },
           onPageFinished: (String url) {
+            print('页面加载完成: $url');
             Provider.of<GameProvider>(context, listen: false).setLoading(false);
           },
           onWebResourceError: (WebResourceError error) {
+            print('WebView 错误: ${error.errorCode} - ${error.description}');
+            print('错误类型: ${error.errorType}');
             ScaffoldMessenger.of(context).showSnackBar(
-              SnackBar(content: Text('加载错误: ${error.description}')),
+              SnackBar(
+                content: Text('加载错误: ${error.description}'),
+                backgroundColor: Colors.red,
+                duration: const Duration(seconds: 5),
+              ),
             );
+          },
+          onNavigationRequest: (NavigationRequest request) {
+            print('导航请求: ${request.url}');
+            return NavigationDecision.navigate;
           },
         ),
       )
-      ..loadRequest(Uri.parse('http://${room?.ip ?? 'localhost'}:${room?.port ?? 8080}'));
+      ..loadRequest(Uri.parse(url));
   }
 
   @override
