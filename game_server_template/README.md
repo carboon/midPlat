@@ -18,8 +18,23 @@
 ├── package.json        # 项目依赖配置
 ├── Dockerfile          # Docker构建文件
 ├── docker-compose.yml  # Docker Compose配置
+├── .env                # 配置文件
 └── public/             # 静态文件目录
-    └── index.html      # 游戏前端页面
+   └── index.html      # 游戏前端页面
+```
+
+## 配置文件
+
+服务支持通过 `.env` 文件进行配置：
+
+```bash
+# .env 配置文件
+MATCHMAKER_URL=http://localhost:8000
+ROOM_NAME=默认房间
+ROOM_PASSWORD=
+PORT=8080
+HEARTBEAT_INTERVAL=25000
+RETRY_INTERVAL=5000
 ```
 
 ## 环境变量
@@ -28,6 +43,8 @@
 - `ROOM_NAME`: 房间名称 (默认: 默认房间)
 - `ROOM_PASSWORD`: 房间密码 (默认: 空)
 - `PORT`: 服务器监听端口 (默认: 8080)
+- `HEARTBEAT_INTERVAL`: 心跳间隔时间（毫秒，默认: 25000）
+- `RETRY_INTERVAL`: 重试间隔时间（毫秒，默认: 5000）
 
 ## 本地开发
 

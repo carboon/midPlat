@@ -1,8 +1,10 @@
 *.pyc
 __pycache__/
 .pytest_cache/
-.env
 .venv/
 venv/
 *.log
 .DS_Store
+
+# Allow .env file to be tracked
+!.env

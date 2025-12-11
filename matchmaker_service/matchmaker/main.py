@@ -1,3 +1,5 @@
+import os
+from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
@@ -5,6 +7,9 @@ from typing import Dict, List, Optional
 from datetime import datetime, timedelta
 import asyncio
 import logging
+
+# 加载环境变量
+load_dotenv()
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -41,7 +46,7 @@ class GameServerInfo(BaseModel):
 class GameServerStore:
     def __init__(self, heartbeat_timeout: int = 30):
         self.servers: Dict[str, Dict] = {}
-        self.heartbeat_timeout = heartbeat_timeout
+        self.heartbeat_timeout = int(os.getenv('HEARTBEAT_TIMEOUT', heartbeat_timeout))
     
     def generate_server_id(self, ip: str, port: int) -> str:
         return f"{ip}:{port}"
@@ -129,8 +134,9 @@ async def startup_event():
     logger.info("Matchmaker service started")
 
 async def periodic_cleanup():
+    cleanup_interval = int(os.getenv('CLEANUP_INTERVAL', 10))
     while True:
-        await asyncio.sleep(10)
+        await asyncio.sleep(cleanup_interval)
         removed = store.cleanup_stale_servers()
         if removed > 0:
             logger.info(f"Cleaned up {removed} stale server(s)")
@@ -204,3 +210,9 @@ async def unregister_server(server_id: str):
 @app.get("/health")
 async def health_check():
     return {"status": "healthy"}
+
+if __name__ == "__main__":
+    import uvicorn
+    host = os.getenv('HOST', '0.0.0.0')
+    port = int(os.getenv('PORT', 8000))
+    uvicorn.run("main:app", host=host, port=port, reload=True)

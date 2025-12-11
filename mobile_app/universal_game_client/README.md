@@ -8,6 +8,7 @@
 - 密码加入房间
 - WebView游戏加载
 - 跨平台支持(iOS/Android)
+- 环境变量配置支持
 
 ## 目录结构
 
@@ -43,18 +44,27 @@ lib/
 │   ├── validators.dart         # 表单验证器
 │   └── logger.dart             # 日志工具
 └── theme/                      # 主题配置
-    ├── app_theme.dart          # 应用主题
-    └── colors.dart             # 颜色定义
+   ├── app_theme.dart          # 应用主题
+   └── colors.dart             # 颜色定义
+```
+
+## 配置文件
+
+客户端支持通过 `.env` 文件进行配置：
+
+```bash
+# .env 配置文件
+MATCHMAKER_URL=http://127.0.0.1:8000
+APP_NAME=Universal Game Client
+ROOM_REFRESH_INTERVAL=30
 ```
 
 ## 环境配置
 
-在 `lib/utils/constants.dart` 中配置撮合服务地址:
+在 `lib/utils/constants.dart` 中配置通过环境变量动态加载:
 
 ```dart
-class Constants {
-  static const String matchmakerUrl = 'http://localhost:8000'; // 更改为实际的撮合服务地址
-}
+// 配置已通过环境变量动态加载，无需手动修改
 ```
 
 ## 依赖说明

@@ -3,6 +3,7 @@ const http = require('http');
 const socketIo = require('socket.io');
 const path = require('path');
 const axios = require('axios');
+require('dotenv').config();
 
 // 初始化 Express 应用
 const app = express();
@@ -11,6 +12,14 @@ const io = socketIo(server);
 
 // 配置静态文件服务
 app.use(express.static(path.join(__dirname, 'public')));
+
+// 从环境变量获取配置
+const PORT = process.env.PORT || 8080;
+const MATCHMAKER_URL = process.env.MATCHMAKER_URL || 'http://localhost:8000';
+const ROOM_NAME = process.env.ROOM_NAME || '默认房间';
+const ROOM_PASSWORD = process.env.ROOM_PASSWORD || '';
+const HEARTBEAT_INTERVAL = parseInt(process.env.HEARTBEAT_INTERVAL) || 25000;
+const RETRY_INTERVAL = parseInt(process.env.RETRY_INTERVAL) || 5000;
 
 // 存储游戏状态
 let gameState = {
@@ -38,7 +47,6 @@ io.on('connection', (socket) => {
 });
 
 // 启动服务器
-const PORT = process.env.PORT || 8080;
 server.listen(PORT, () => {
   console.log(`游戏服务器运行在端口 ${PORT}`);
   
@@ -49,11 +57,6 @@ server.listen(PORT, () => {
 // 心跳上报逻辑
 async function sendHeartbeat() {
   try {
-    // 从环境变量获取撮合服务地址和房间信息
-    const MATCHMAKER_URL = process.env.MATCHMAKER_URL || 'http://localhost:8000';
-    const ROOM_NAME = process.env.ROOM_NAME || '默认房间';
-    const ROOM_PASSWORD = process.env.ROOM_PASSWORD || '';
-    
     // 获取本机IP地址
     const os = require('os');
     const networkInterfaces = os.networkInterfaces();
@@ -71,11 +74,11 @@ async function sendHeartbeat() {
     
     console.log(`心跳上报成功: ${ipAddress}:${PORT} (${ROOM_NAME})`);
     
-    // 每隔25秒发送一次心跳 (撮合服务超时时间为30秒)
-    setTimeout(sendHeartbeat, 25000);
+    // 每隔指定时间发送一次心跳
+    setTimeout(sendHeartbeat, HEARTBEAT_INTERVAL);
   } catch (error) {
     console.error('心跳上报失败:', error.message);
-    // 5秒后重试
-    setTimeout(sendHeartbeat, 5000);
+    // 指定时间后重试
+    setTimeout(sendHeartbeat, RETRY_INTERVAL);
   }
 }

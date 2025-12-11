@@ -1,0 +1,16 @@
+# Project-wide .gitignore
+*.log
+.DS_Store
+.env
+*.tmp
+*.temp
+
+# IDE specific files
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS generated files
+Thumbs.db
+.DS_Store

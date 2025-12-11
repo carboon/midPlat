@@ -10,6 +10,7 @@
 - ✅ RESTful API 接口
 - ✅ Docker 容器化部署
 - ✅ CORS 支持，方便前端调用
+- ✅ 环境变量配置支持
 
 ## API 接口
 
@@ -90,6 +91,19 @@ DELETE /servers/{server_id}
 GET /health
 ```
 
+## 配置文件
+
+服务支持通过 `.env` 文件进行配置：
+
+```bash
+# .env 配置文件
+PYTHONUNBUFFERED=1
+HOST=0.0.0.0
+PORT=8000
+HEARTBEAT_TIMEOUT=30
+CLEANUP_INTERVAL=10
+```
+
 ## 快速启动
 
 ### 方式一：Docker Compose（推荐）
@@ -103,8 +117,15 @@ docker-compose up -d
 ### 方式二：本地运行
 ```bash
 cd matchmaker
+# 创建虚拟环境
+python3 -m venv venv
+source venv/bin/activate
+
+# 安装依赖
 pip install -r requirements.txt
-uvicorn main:app --host 0.0.0.0 --port 8000 --reload
+
+# 启动服务
+python main.py
 ```
 
 ## 测试示例
@@ -185,9 +206,10 @@ setInterval(sendHeartbeat, 15000);
 
 ## 配置说明
 
-- **心跳超时时间**：默认 30 秒，可在 `main.py` 中修改 `GameServerStore(heartbeat_timeout=30)`
-- **清理间隔**：每 10 秒检查一次过期服务器
-- **端口**：默认 8000，可在 `docker-compose.yml` 中修改
+- **心跳超时时间**：默认 30 秒，可通过 `HEARTBEAT_TIMEOUT` 环境变量修改
+- **清理间隔**：默认 10 秒，可通过 `CLEANUP_INTERVAL` 环境变量修改
+- **端口**：默认 8000，可通过 `PORT` 环境变量修改
+- **主机**：默认 0.0.0.0，可通过 `HOST` 环境变量修改
 
 ## 架构说明
 
