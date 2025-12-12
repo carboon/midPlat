@@ -4,7 +4,7 @@ import '../models/room.dart';
 import '../utils/constants.dart';
 
 class ApiService {
-  static const String _baseUrl = Constants.matchmakerUrl;
+  static String get _baseUrl => Constants.matchmakerUrl;
 
   // 获取房间列表
   static Future<List<Room>> fetchRooms() async {
