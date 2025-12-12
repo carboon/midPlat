@@ -44,5 +44,12 @@ app.*.map.json
 /android/app/profile
 /android/app/release
 
+# Local configuration files
+local.properties
+.metadata
+
+# Generated plugin registrant files
+GeneratedPluginRegistrant.*
+
 # Allow .env file to be tracked
 !.env
