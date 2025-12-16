@@ -7,24 +7,24 @@
 ```
 .
 ├── game_server_template/          # 游戏服务器模板
-│   ├── Dockerfile                 # Docker配置文件
+│   ├── Dockerfile                 # Docker镜像构建配置文件
 │   ├── README.md                  # 服务器说明文档
-│   ├── docker-compose.yml         # Docker编排文件
+│   ├── docker-compose.yml         # Docker服务编排文件
 │   ├── package-lock.json          # npm依赖锁文件
 │   ├── package.json               # npm包配置
 │   ├── public/                    # 静态资源目录
 │   │   └── index.html             # 主页
-│   ├── .env                       # 服务器配置文件
+│   ├── .env                       # 服务器环境配置文件
 │   └── server.js                  # 服务器主程序
 │
 ├── matchmaker_service/            # 匹配服务
 │   └── matchmaker/                # 匹配器模块
-│       ├── Dockerfile             # Docker配置文件
+│       ├── Dockerfile             # Docker镜像构建配置文件
 │       ├── README.md              # 匹配服务说明文档
-│       ├── docker-compose.yml     # Docker编排文件
+│       ├── docker-compose.yml     # Docker服务编排文件
 │       ├── main.py                # 匹配服务主程序
 │       ├── requirements.txt       # Python依赖列表
-│       ├── .env                   # 服务配置文件
+│       ├── .env                   # 服务环境配置文件
 │       └── test_matchmaker.py     # 匹配服务测试
 │
 ├── mobile_app/                    # 移动端应用
@@ -43,8 +43,11 @@
 │       │   ├── theme/             # 主题配置
 │       │   ├── utils/             # 工具类
 │       │   └── widgets/           # 自定义组件
-│       ├── .env                   # 客户端配置文件
+│       ├── .env                   # 客户端环境配置文件
 │       └── pubspec.yaml           # Flutter依赖配置
+│
+├── docker-compose.yml             # 全局Docker服务编排文件
+└── PROJECT_STRUCTURE.md           # 项目结构说明文件
 ```
 
 ## 1. 环境准备
@@ -198,7 +201,7 @@ ROOM_REFRESH_INTERVAL=30
 # 1. 进入目录
 cd matchmaker_service/matchmaker
 
-# 2. 创建虚拟环境
+# 2. 创建虚拟环境（推荐）
 python3 -m venv venv
 source venv/bin/activate  # macOS/Linux
 # 或 venv\Scripts\activate  # Windows
@@ -212,6 +215,7 @@ python main.py
 
 #### Docker运行方式
 ```bash
+# 方式一：使用模块内的docker-compose.yml（适用于开发测试）
 # 1. 进入目录
 cd matchmaker_service/matchmaker
 
@@ -220,6 +224,16 @@ docker-compose up -d
 
 # 3. 查看日志
 docker-compose logs -f
+
+# 方式二：使用根目录下的全局docker-compose.yml（推荐用于生产环境）
+# 1. 返回项目根目录
+cd ../..
+
+# 2. 构建并启动
+docker-compose up -d matchmaker
+
+# 3. 查看日志
+docker-compose logs -f matchmaker
 ```
 
 ### 3.3 游戏服务器启动
@@ -238,16 +252,24 @@ npm start
 
 #### Docker运行方式
 ```bash
+# 方式一：使用模块内的docker-compose.yml（适用于开发测试）
 # 1. 进入目录
 cd game_server_template
 
 # 2. 构建并启动
 docker-compose up --build
+
+# 方式二：使用根目录下的全局docker-compose.yml（推荐用于生产环境）
+# 1. 返回项目根目录
+cd ..
+
+# 2. 构建并启动
+docker-compose up --build game-server
 ```
 
 ### 3.4 移动端应用启动
 
-#### 开发模式运行
+### 开发模式运行
 ```bash
 # 1. 进入目录
 cd mobile_app/universal_game_client
@@ -259,7 +281,7 @@ flutter pub get
 flutter run
 ```
 
-#### 构建发布版本
+### 构建发布版本
 ```bash
 # macOS
 flutter build macos
@@ -271,9 +293,206 @@ flutter build apk
 flutter build ios
 ```
 
-## 4. 验证服务正常运行
+### macOS客户端网络权限配置
+在macOS上运行客户端时，需要配置网络权限以允许应用访问网络服务：
 
-### 4.1 匹配服务验证
+1. 确保`macos/Runner/DebugProfile.entitlements`和`macos/Runner/Release.entitlements`文件包含以下权限配置：
+   ```xml
+   <key>com.apple.security.network.client</key>
+   <true/>
+   <key>com.apple.security.network.server</key>
+   <true/>
+   ```
+
+2. 如果遇到网络连接问题，请检查系统偏好设置中的安全与隐私设置，确保应用具有网络访问权限。
+
+### Web端运行方式
+可以通过Web浏览器运行前端应用：
+
+1. 进入游戏服务器目录：
+   ```bash
+   cd game_server_template
+   ```
+
+2. 启动服务器：
+   ```bash
+   npm start
+   ```
+
+3. 在浏览器中访问：
+   ```
+   http://localhost:8080
+   ```
+
+### 客户端连接配置
+客户端通过环境变量配置连接到后端服务：
+
+#### 匹配服务连接配置
+在`mobile_app/universal_game_client/.env`文件中设置：
+```bash
+MATCHMAKER_URL=http://127.0.0.1:8000
+```
+
+注意：在Docker环境中，macOS客户端需要使用`http://host.docker.internal:8000`来连接匹配服务。
+
+#### 网络配置说明
+- 匹配服务默认端口：8000
+- 游戏服务器默认端口：8080
+- 在本地开发环境中，客户端通常连接`127.0.0.1`或`localhost`
+- 在Docker环境中，需要根据网络配置调整连接地址
+
+## 4. 服务控制说明
+
+### 4.1 停止服务
+
+#### 停止Docker服务
+```bash
+# 停止特定服务
+docker-compose stop matchmaker
+docker-compose stop game-server
+
+# 停止所有服务
+docker-compose stop
+
+# 停止并删除容器
+docker-compose down
+```
+
+#### 停止本地运行的服务
+对于本地运行的服务，可以通过以下方式停止：
+1. 在终端中按 `Ctrl+C` 终止正在运行的服务
+2. 使用系统进程管理工具终止后台运行的服务
+
+### 4.2 重启服务
+
+#### 重启Docker服务
+```bash
+# 重启特定服务
+docker-compose restart matchmaker
+docker-compose restart game-server
+
+# 重启所有服务
+docker-compose restart
+```
+
+#### 重启本地服务
+```bash
+# 对于本地运行的服务，需要手动停止后再启动
+# 1. 在终端中按 Ctrl+C 停止服务
+# 2. 重新运行启动命令
+```
+
+### 4.3 查看服务状态
+
+#### Docker服务状态
+```bash
+# 查看所有容器状态
+docker-compose ps
+
+# 查看特定服务日志
+docker-compose logs matchmaker
+docker-compose logs game-server
+
+# 实时跟踪日志
+docker-compose logs -f matchmaker
+docker-compose logs -f game-server
+```
+
+#### 本地服务状态
+对于本地运行的服务，可以在终端中直接查看输出日志。
+
+### 4.4 常见问题排查
+
+#### 端口冲突
+```bash
+# 查找占用端口的进程
+lsof -i :8000  # 匹配服务端口
+lsof -i :8080  # 游戏服务器端口
+
+# 终止进程
+kill [PID]
+```
+
+#### 网络连接问题
+
+##### macOS防火墙设置
+1. 打开"系统偏好设置" → "安全性与隐私" → "防火墙"
+2. 确保允许Flutter应用和Python应用通过防火墙
+
+##### Docker网络问题
+```bash
+# 检查Docker网络
+docker network ls
+
+# 重建网络
+docker-compose down
+docker-compose up -d
+```
+
+#### 依赖安装问题
+
+##### Python虚拟环境问题
+```bash
+# 删除现有虚拟环境
+rm -rf venv
+
+# 重新创建
+python3 -m venv venv
+source venv/bin/activate
+pip install -r requirements.txt
+```
+
+##### Node.js依赖问题
+```bash
+# 清理缓存
+npm cache clean --force
+
+# 删除node_modules
+rm -rf node_modules package-lock.json
+
+# 重新安装
+npm install
+```
+
+##### Flutter依赖问题
+```bash
+# 清理Flutter缓存
+flutter pub cache repair
+
+# 清理项目
+flutter clean
+flutter pub get
+```
+
+#### 权限问题
+
+##### macOS应用权限
+1. 打开"系统偏好设置" → "安全性与隐私" → "隐私"
+2. 检查"完全磁盘访问权限"和"网络"部分
+3. 确保Flutter应用有相应权限
+
+#### 国内网络优化
+
+##### Flutter镜像源配置
+```bash
+# 添加到 ~/.bashrc 或 ~/.zshrc
+export PUB_HOSTED_URL=https://pub.flutter-io.cn
+export FLUTTER_STORAGE_BASE_URL=https://storage.flutter-io.cn
+```
+
+##### pip镜像源配置
+```bash
+# 创建 ~/.pip/pip.conf 文件
+[global]
+index-url = https://mirrors.aliyun.com/pypi/simple/
+
+[install]
+trusted-host = mirrors.aliyun.com
+```
+
+## 5. 验证服务正常运行
+
+### 5.1 匹配服务验证
 ```bash
 # 检查服务状态
 curl http://localhost:8000/
@@ -286,9 +505,15 @@ curl http://localhost:8000/servers
 
 # 预期响应
 [{"server_id":"localhost:8080","ip":"localhost","port":8080,"name":"默认房间","max_players":20,"current_players":0,"metadata":{},"last_heartbeat":"2025-12-11T15:00:19.837859","uptime":1090}]
+
+# 健康检查
+curl http://localhost:8000/health
+
+# 预期响应
+{"status":"healthy"}
 ```
 
-### 4.2 游戏服务器验证
+### 5.2 游戏服务器验证
 ```bash
 # 检查游戏服务器状态
 curl http://localhost:8080/
@@ -299,13 +524,25 @@ curl http://localhost:8080/
 # 可使用浏览器开发者工具查看WebSocket连接状态
 ```
 
-### 4.3 移动端应用验证
+### 5.3 移动端应用验证
 1. 应用成功启动，显示主界面
 2. 能够加载房间列表
 3. 能够连接到游戏服务器
 4. 能够正常进行游戏交互
 
-## 5. 常见问题排查
+### 5.4 API文档访问
+
+#### 匹配服务API
+启动匹配服务后，可访问以下地址查看API文档：
+- Swagger UI: http://localhost:8000/docs
+- ReDoc: http://localhost:8000/redoc
+
+#### 游戏服务器API
+游戏服务器提供以下接口：
+- WebSocket连接: 自动建立
+- 静态文件服务: `/` (提供index.html)
+
+## 6. 常见问题排查
 
 ### 5.1 端口冲突
 ```bash

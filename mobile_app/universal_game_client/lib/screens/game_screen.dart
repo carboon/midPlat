@@ -22,7 +22,8 @@ class _GameScreenState extends State<GameScreen> {
     
     // 获取当前房间信息
     final room = Provider.of<RoomProvider>(context, listen: false).currentRoom;
-    final url = 'http://${room?.ip ?? 'localhost'}:${room?.port ?? 8080}';
+    // 使用Docker容器中的服务地址
+    final url = 'http://localhost:8080';
     
     print('=== GameScreen 初始化 ===');
     print('房间信息: ${room?.name}');
