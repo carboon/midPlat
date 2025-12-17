@@ -1,0 +1,27 @@
+{
+  "enabled": true,
+  "name": "Auto Translation Generator",
+  "description": "Monitor changes to files containing user-facing text content (such as .json, .yaml, or other localization files) in the primary language. When changes are detected, automatically identify the new or modified text and generate translations for all configured target languages. Ensure translations maintain proper context and meaning while adhering to locale-specific conventions.",
+  "version": "1",
+  "when": {
+    "type": "fileEdited",
+    "patterns": [
+      "**/*.json",
+      "**/*.yaml",
+      "**/*.yml",
+      "**/strings.xml",
+      "**/*_en.json",
+      "**/*_en.yaml",
+      "**/en.json",
+      "**/en.yaml",
+      "**/localization/*.json",
+      "**/l10n/*.json",
+      "**/i18n/*.json",
+      "**/assets/translations/*.json"
+    ]
+  },
+  "then": {
+    "type": "askAgent",
+    "prompt": "A localization file has been modified. Please analyze the changes in this file and:\n\n1. Identify any new or modified text strings that need translation\n2. Determine the primary language of the content (likely English)\n3. Generate appropriate translations for common target languages (Spanish, French, German, Chinese, Japanese, etc.)\n4. Ensure translations maintain proper context, tone, and cultural appropriateness\n5. Follow locale-specific formatting conventions (date formats, number formats, etc.)\n6. Preserve any placeholders, variables, or formatting markers in the translations\n7. Create or update corresponding translation files for each target language\n\nPlease provide the translations in the same file format and structure as the source file, maintaining all keys and hierarchy while translating only the values."
+  }
+}

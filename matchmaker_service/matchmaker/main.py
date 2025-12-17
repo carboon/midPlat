@@ -209,7 +209,20 @@ async def unregister_server(server_id: str):
 
 @app.get("/health")
 async def health_check():
-    return {"status": "healthy"}
+    """健康检查端点 - 返回服务状态和基本统计信息"""
+    active_servers = store.get_all_active_servers()
+    total_players = sum(s.current_players for s in active_servers)
+    
+    return {
+        "status": "healthy",
+        "timestamp": datetime.now().isoformat(),
+        "statistics": {
+            "active_servers": len(active_servers),
+            "total_registered_servers": len(store.servers),
+            "total_players": total_players,
+            "heartbeat_timeout_seconds": store.heartbeat_timeout
+        }
+    }
 
 if __name__ == "__main__":
     import uvicorn

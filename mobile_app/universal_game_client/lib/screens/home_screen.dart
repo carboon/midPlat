@@ -6,6 +6,7 @@ import '../widgets/room_card.dart';
 import '../widgets/custom_app_bar.dart';
 import '../routes/app_routes.dart';
 import '../models/room.dart';
+import '../theme/colors.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -21,6 +22,15 @@ class _HomeScreenState extends State<HomeScreen> {
   void initState() {
     super.initState();
     _roomsFuture = ApiService.fetchRooms();
+  }
+
+  String _getErrorMessage(dynamic error) {
+    if (error is NetworkException) {
+      return error.message;
+    } else if (error is ApiException) {
+      return error.message;
+    }
+    return '加载失败: ${error.toString()}';
   }
 
   @override
@@ -41,9 +51,26 @@ class _HomeScreenState extends State<HomeScreen> {
           if (snapshot.connectionState == ConnectionState.waiting) {
             return const Center(child: CircularProgressIndicator());
           } else if (snapshot.hasError) {
-            return Center(child: Text('加载失败: ${snapshot.error}'));
+            return Center(
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Icon(Icons.error_outline, size: 64, color: AppColors.error),
+                  const SizedBox(height: 16),
+                  Text(_getErrorMessage(snapshot.error)),
+                  const SizedBox(height: 16),
+                  ElevatedButton(
+                    onPressed: _refreshRooms,
+                    child: const Text('重试'),
+                  ),
+                ],
+              ),
+            );
           } else if (snapshot.hasData) {
             final rooms = snapshot.data!;
+            if (rooms.isEmpty) {
+              return const Center(child: Text('暂无房间'));
+            }
             return ListView.builder(
               itemCount: rooms.length,
               itemBuilder: (context, index) {
