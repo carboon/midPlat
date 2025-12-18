@@ -21,16 +21,64 @@ from resource_manager import ResourceManager, ResourceLimits
 # 加载环境变量
 load_dotenv()
 
-# 配置日志系统
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    handlers=[
-        logging.FileHandler('game_server_factory.log'),
-        logging.StreamHandler()
-    ]
-)
+# 验证配置 - 需求 7.3
+config_errors = Config.validate_config()
+if config_errors:
+    print("Configuration errors found:")
+    for error in config_errors:
+        print(f"  - {error}")
+    exit(1)
+
+# 配置增强日志系统 - 需求 8.1
+import logging.handlers
+
+def setup_logging():
+    """设置增强的日志系统"""
+    log_config = Config.get_log_config()
+    
+    # 创建根日志记录器
+    root_logger = logging.getLogger()
+    root_logger.setLevel(log_config["level"])
+    
+    # 清除现有处理器
+    for handler in root_logger.handlers[:]:
+        root_logger.removeHandler(handler)
+    
+    # 创建格式化器
+    formatter = logging.Formatter(log_config["format"])
+    
+    # 添加文件处理器（带轮转）
+    file_handler = logging.handlers.RotatingFileHandler(
+        filename=Config.LOG_FILE,
+        maxBytes=Config.LOG_MAX_SIZE,
+        backupCount=Config.LOG_BACKUP_COUNT,
+        encoding='utf-8'
+    )
+    file_handler.setFormatter(formatter)
+    root_logger.addHandler(file_handler)
+    
+    # 添加控制台处理器
+    console_handler = logging.StreamHandler()
+    console_handler.setFormatter(formatter)
+    root_logger.addHandler(console_handler)
+    
+    # 设置第三方库的日志级别
+    logging.getLogger("uvicorn").setLevel(logging.WARNING)
+    logging.getLogger("docker").setLevel(logging.WARNING)
+    logging.getLogger("urllib3").setLevel(logging.WARNING)
+
+setup_logging()
 logger = logging.getLogger(__name__)
+
+# 记录配置信息
+logger.info(f"Game Server Factory starting with configuration:")
+logger.info(f"  Environment: {Config.ENVIRONMENT}")
+logger.info(f"  Host: {Config.HOST}:{Config.PORT}")
+logger.info(f"  Debug mode: {Config.DEBUG}")
+logger.info(f"  Max file size: {Config.MAX_FILE_SIZE / (1024*1024):.1f}MB")
+logger.info(f"  Max containers: {Config.MAX_CONTAINERS}")
+logger.info(f"  Docker network: {Config.DOCKER_NETWORK}")
+logger.info(f"  Matchmaker URL: {Config.MATCHMAKER_URL}")
 
 # GameServerInstance数据模型
 class GameServerInstance(BaseModel):
@@ -80,34 +128,157 @@ class CodeUploadRequest(BaseModel):
     max_players: int = Field(default=10, ge=1, le=100, description="最大玩家数")
 
 class HealthResponse(BaseModel):
-    """健康检查响应模型"""
-    status: str = Field(..., description="服务状态")
-    containers: int = Field(..., description="容器数量")
+    """增强健康检查响应模型 - 需求 6.2, 6.3"""
+    status: str = Field(..., description="服务状态: healthy, degraded, limited, unhealthy")
+    containers: int = Field(..., description="运行中的容器数量")
     timestamp: str = Field(default_factory=lambda: datetime.now().isoformat())
+    components: Optional[Dict[str, str]] = Field(None, description="各组件健康状态")
+    configuration: Optional[Dict[str, Any]] = Field(None, description="配置信息")
+    
+    class Config:
+        schema_extra = {
+            "example": {
+                "status": "healthy",
+                "containers": 5,
+                "timestamp": "2025-12-18T10:00:00Z",
+                "components": {
+                    "docker_manager": "healthy",
+                    "resource_manager": "healthy",
+                    "matchmaker_service": "healthy"
+                },
+                "configuration": {
+                    "environment": "production",
+                    "max_containers": 50,
+                    "debug_mode": False
+                }
+            }
+        }
 
 class ErrorResponse(BaseModel):
     """错误响应模型"""
     error: Dict[str, Any] = Field(..., description="错误信息")
 
-# 配置管理
+# 增强配置管理 - 需求 7.3
 class Config:
-    """应用配置管理"""
+    """应用配置管理 - 支持环境适配和验证"""
     
     # 服务器配置
     HOST = os.getenv("HOST", "0.0.0.0")
     PORT = int(os.getenv("PORT", 8080))
     DEBUG = os.getenv("DEBUG", "false").lower() == "true"
+    ENVIRONMENT = os.getenv("ENVIRONMENT", "development")  # development, staging, production
     
     # 文件上传配置
     MAX_FILE_SIZE = int(os.getenv("MAX_FILE_SIZE", 1024 * 1024))  # 1MB
     ALLOWED_EXTENSIONS = os.getenv("ALLOWED_EXTENSIONS", ".js,.mjs").split(",")
+    UPLOAD_TIMEOUT = int(os.getenv("UPLOAD_TIMEOUT", 300))  # 5 minutes
     
     # Docker配置
     DOCKER_NETWORK = os.getenv("DOCKER_NETWORK", "game-network")
     BASE_PORT = int(os.getenv("BASE_PORT", 8081))
+    MAX_CONTAINERS = int(os.getenv("MAX_CONTAINERS", 50))
+    CONTAINER_MEMORY_LIMIT = os.getenv("CONTAINER_MEMORY_LIMIT", "512m")
+    CONTAINER_CPU_LIMIT = float(os.getenv("CONTAINER_CPU_LIMIT", 1.0))
+    
+    # 外部服务配置
+    MATCHMAKER_URL = os.getenv("MATCHMAKER_URL", "http://localhost:8000")
+    MATCHMAKER_TIMEOUT = int(os.getenv("MATCHMAKER_TIMEOUT", 10))
+    
+    # 资源管理配置
+    IDLE_TIMEOUT_SECONDS = int(os.getenv("IDLE_TIMEOUT_SECONDS", 1800))  # 30 minutes
+    CLEANUP_INTERVAL_SECONDS = int(os.getenv("CLEANUP_INTERVAL_SECONDS", 300))  # 5 minutes
+    RESOURCE_CHECK_INTERVAL = int(os.getenv("RESOURCE_CHECK_INTERVAL", 60))  # 1 minute
     
     # 日志配置
     LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")
+    LOG_FILE = os.getenv("LOG_FILE", "game_server_factory.log")
+    LOG_MAX_SIZE = int(os.getenv("LOG_MAX_SIZE", 10 * 1024 * 1024))  # 10MB
+    LOG_BACKUP_COUNT = int(os.getenv("LOG_BACKUP_COUNT", 5))
+    
+    # 安全配置
+    ALLOWED_ORIGINS = os.getenv("ALLOWED_ORIGINS", "*").split(",")
+    API_RATE_LIMIT = int(os.getenv("API_RATE_LIMIT", 100))  # requests per minute
+    
+    @classmethod
+    def validate_config(cls) -> List[str]:
+        """验证配置参数 - 需求 7.3"""
+        errors = []
+        
+        # 验证端口范围
+        if not (1024 <= cls.PORT <= 65535):
+            errors.append(f"PORT must be between 1024 and 65535, got {cls.PORT}")
+        
+        if not (1024 <= cls.BASE_PORT <= 65535):
+            errors.append(f"BASE_PORT must be between 1024 and 65535, got {cls.BASE_PORT}")
+        
+        # 验证文件大小限制
+        if cls.MAX_FILE_SIZE <= 0:
+            errors.append(f"MAX_FILE_SIZE must be positive, got {cls.MAX_FILE_SIZE}")
+        
+        # 验证容器限制
+        if cls.MAX_CONTAINERS <= 0:
+            errors.append(f"MAX_CONTAINERS must be positive, got {cls.MAX_CONTAINERS}")
+        
+        # 验证超时设置
+        if cls.UPLOAD_TIMEOUT <= 0:
+            errors.append(f"UPLOAD_TIMEOUT must be positive, got {cls.UPLOAD_TIMEOUT}")
+        
+        if cls.IDLE_TIMEOUT_SECONDS <= 0:
+            errors.append(f"IDLE_TIMEOUT_SECONDS must be positive, got {cls.IDLE_TIMEOUT_SECONDS}")
+        
+        # 验证环境设置
+        valid_environments = ["development", "staging", "production"]
+        if cls.ENVIRONMENT not in valid_environments:
+            errors.append(f"ENVIRONMENT must be one of {valid_environments}, got {cls.ENVIRONMENT}")
+        
+        # 验证日志级别
+        valid_log_levels = ["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"]
+        if cls.LOG_LEVEL.upper() not in valid_log_levels:
+            errors.append(f"LOG_LEVEL must be one of {valid_log_levels}, got {cls.LOG_LEVEL}")
+        
+        return errors
+    
+    @classmethod
+    def get_cors_config(cls) -> Dict[str, Any]:
+        """获取CORS配置 - 根据环境调整安全设置"""
+        if cls.ENVIRONMENT == "production":
+            return {
+                "allow_origins": cls.ALLOWED_ORIGINS if cls.ALLOWED_ORIGINS != ["*"] else [],
+                "allow_credentials": True,
+                "allow_methods": ["GET", "POST", "DELETE"],
+                "allow_headers": ["*"],
+            }
+        else:
+            return {
+                "allow_origins": ["*"],
+                "allow_credentials": True,
+                "allow_methods": ["*"],
+                "allow_headers": ["*"],
+            }
+    
+    @classmethod
+    def is_production(cls) -> bool:
+        """检查是否为生产环境"""
+        return cls.ENVIRONMENT == "production"
+    
+    @classmethod
+    def get_log_config(cls) -> Dict[str, Any]:
+        """获取日志配置"""
+        return {
+            "level": getattr(logging, cls.LOG_LEVEL.upper()),
+            "format": '%(asctime)s - %(name)s - %(levelname)s - %(message)s - [%(pathname)s:%(lineno)d]',
+            "handlers": [
+                {
+                    "class": "logging.handlers.RotatingFileHandler",
+                    "filename": cls.LOG_FILE,
+                    "maxBytes": cls.LOG_MAX_SIZE,
+                    "backupCount": cls.LOG_BACKUP_COUNT,
+                },
+                {
+                    "class": "logging.StreamHandler",
+                }
+            ]
+        }
 
 # 创建FastAPI应用
 app = FastAPI(
@@ -118,46 +289,113 @@ app = FastAPI(
     redoc_url="/redoc"
 )
 
-# 设置CORS中间件
+# 设置CORS中间件 - 根据环境配置安全策略
+cors_config = Config.get_cors_config()
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # 在生产环境中应该限制具体的域名
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    **cors_config
 )
 
-# 全局异常处理器
-@app.exception_handler(HTTPException)
-async def http_exception_handler(request, exc: HTTPException):
-    """HTTP异常处理器"""
-    logger.error(f"HTTP error: {exc.status_code} - {exc.detail}")
-    return JSONResponse(
-        status_code=exc.status_code,
-        content={
-            "error": {
-                "code": exc.status_code,
-                "message": exc.detail,
-                "timestamp": datetime.now().isoformat(),
-                "path": str(request.url)
+# 标准化错误响应模型
+class StandardErrorResponse(BaseModel):
+    """标准化错误响应格式 - 需求 6.4, 6.5"""
+    error: Dict[str, Any] = Field(..., description="错误详情")
+    
+    class Config:
+        schema_extra = {
+            "example": {
+                "error": {
+                    "code": 400,
+                    "message": "请求参数错误",
+                    "timestamp": "2025-12-18T10:00:00Z",
+                    "path": "/upload",
+                    "details": {"field": "name", "issue": "名称不能为空"}
+                }
             }
         }
+
+def create_error_response(
+    status_code: int,
+    message: str,
+    path: str,
+    details: Optional[Dict[str, Any]] = None
+) -> Dict[str, Any]:
+    """创建标准化错误响应 - 需求 6.4, 6.5, 8.1"""
+    error_response = {
+        "error": {
+            "code": status_code,
+            "message": message,
+            "timestamp": datetime.now().isoformat(),
+            "path": path
+        }
+    }
+    
+    if details:
+        error_response["error"]["details"] = details
+    
+    return error_response
+
+# 全局异常处理器 - 需求 8.1, 8.2, 8.3, 8.4, 8.5
+@app.exception_handler(HTTPException)
+async def http_exception_handler(request, exc: HTTPException):
+    """HTTP异常处理器 - 标准化错误响应格式"""
+    logger.error(
+        f"HTTP error: {exc.status_code} - {exc.detail}",
+        extra={
+            "path": str(request.url),
+            "method": request.method,
+            "client": request.client.host if request.client else "unknown"
+        }
+    )
+    
+    # 处理详细错误信息
+    details = None
+    if isinstance(exc.detail, dict):
+        details = exc.detail
+        message = exc.detail.get("message", "请求错误")
+    else:
+        message = str(exc.detail)
+    
+    return JSONResponse(
+        status_code=exc.status_code,
+        content=create_error_response(
+            status_code=exc.status_code,
+            message=message,
+            path=str(request.url),
+            details=details if isinstance(details, dict) else None
+        )
     )
 
 @app.exception_handler(Exception)
 async def general_exception_handler(request, exc: Exception):
-    """通用异常处理器"""
-    logger.error(f"Unexpected error: {str(exc)}", exc_info=True)
+    """通用异常处理器 - 捕获所有未处理的异常"""
+    logger.error(
+        f"Unexpected error: {str(exc)}",
+        exc_info=True,
+        extra={
+            "path": str(request.url),
+            "method": request.method,
+            "client": request.client.host if request.client else "unknown",
+            "exception_type": type(exc).__name__
+        }
+    )
+    
+    # 在开发模式下提供更详细的错误信息
+    details = None
+    if Config.DEBUG:
+        details = {
+            "exception_type": type(exc).__name__,
+            "exception_message": str(exc)
+        }
+    
     return JSONResponse(
         status_code=500,
-        content={
-            "error": {
-                "code": 500,
-                "message": "内部服务器错误",
-                "timestamp": datetime.now().isoformat(),
-                "path": str(request.url)
-            }
-        }
+        content=create_error_response(
+            status_code=500,
+            message="内部服务器错误" if not Config.DEBUG else str(exc),
+            path=str(request.url),
+            details=details
+        )
     )
 
 # 基础路由
@@ -174,22 +412,85 @@ async def root():
 
 @app.get("/health", response_model=HealthResponse)
 async def health_check():
-    """健康检查端点"""
+    """增强健康检查端点 - 需求 6.2, 6.3"""
     try:
         container_count = 0
+        docker_status = "unavailable"
+        resource_manager_status = "unavailable"
         
+        # 检查Docker管理器状态
         if docker_manager:
-            # 获取游戏容器数量
-            game_containers = docker_manager.list_game_containers()
-            container_count = len([c for c in game_containers if c.status == 'running'])
+            try:
+                # 获取游戏容器数量
+                game_containers = docker_manager.list_game_containers()
+                container_count = len([c for c in game_containers if c.status == 'running'])
+                docker_status = "healthy"
+            except Exception as e:
+                logger.warning(f"Docker health check failed: {e}")
+                docker_status = "error"
         
-        return HealthResponse(
-            status="healthy" if docker_manager else "limited",
-            containers=container_count
-        )
+        # 检查资源管理器状态
+        if resource_manager:
+            try:
+                resource_stats = resource_manager.get_resource_stats()
+                resource_manager_status = "healthy"
+            except Exception as e:
+                logger.warning(f"Resource manager health check failed: {e}")
+                resource_manager_status = "error"
+        
+        # 检查外部服务连接
+        matchmaker_status = await check_matchmaker_health()
+        
+        # 确定整体健康状态
+        overall_status = "healthy"
+        if docker_status == "error" or resource_manager_status == "error":
+            overall_status = "degraded"
+        elif docker_status == "unavailable" and resource_manager_status == "unavailable":
+            overall_status = "limited"
+        
+        health_data = {
+            "status": overall_status,
+            "containers": container_count,
+            "timestamp": datetime.now().isoformat(),
+            "components": {
+                "docker_manager": docker_status,
+                "resource_manager": resource_manager_status,
+                "matchmaker_service": matchmaker_status
+            },
+            "configuration": {
+                "environment": Config.ENVIRONMENT,
+                "max_containers": Config.MAX_CONTAINERS,
+                "debug_mode": Config.DEBUG
+            }
+        }
+        
+        return HealthResponse(**health_data)
+        
     except Exception as e:
-        logger.error(f"Health check failed: {str(e)}")
-        raise HTTPException(status_code=503, detail="服务不可用")
+        logger.error(f"Health check failed: {str(e)}", exc_info=True)
+        raise HTTPException(
+            status_code=503, 
+            detail=create_error_response(
+                status_code=503,
+                message="健康检查失败",
+                path="/health",
+                details={"error": str(e)} if Config.DEBUG else None
+            )["error"]
+        )
+
+async def check_matchmaker_health() -> str:
+    """检查撮合服务健康状态"""
+    try:
+        import httpx
+        async with httpx.AsyncClient(timeout=Config.MATCHMAKER_TIMEOUT) as client:
+            response = await client.get(f"{Config.MATCHMAKER_URL}/health")
+            if response.status_code == 200:
+                return "healthy"
+            else:
+                return "error"
+    except Exception as e:
+        logger.debug(f"Matchmaker health check failed: {e}")
+        return "unavailable"
 
 # 临时存储 - 在实际实现中应该使用数据库
 game_servers: Dict[str, GameServerInstance] = {}
@@ -699,6 +1000,323 @@ async def update_server_activity(server_id: str, connection_count: int = 0):
     except Exception as e:
         logger.error(f"更新服务器活动状态失败: {str(e)}")
         raise HTTPException(status_code=500, detail="更新服务器活动状态失败")
+
+# 系统集成和监控端点 - 需求 6.1, 6.2, 6.3
+@app.get("/system/integration-status")
+async def get_integration_status():
+    """获取系统集成状态 - 端到端工作流程检查"""
+    try:
+        status = {
+            "timestamp": datetime.now().isoformat(),
+            "overall_status": "healthy",
+            "services": {},
+            "workflows": {}
+        }
+        
+        # 检查各个服务状态
+        services_status = {}
+        
+        # 1. 检查Game Server Factory本身
+        services_status["game_server_factory"] = {
+            "status": "healthy",
+            "containers_managed": len(game_servers),
+            "docker_available": docker_manager is not None,
+            "resource_manager_available": resource_manager is not None
+        }
+        
+        # 2. 检查Matchmaker Service
+        matchmaker_status = await check_matchmaker_health()
+        services_status["matchmaker_service"] = {
+            "status": matchmaker_status,
+            "url": Config.MATCHMAKER_URL
+        }
+        
+        # 3. 检查Docker环境
+        if docker_manager:
+            try:
+                docker_stats = docker_manager.get_system_stats()
+                services_status["docker_environment"] = {
+                    "status": "healthy",
+                    "stats": docker_stats
+                }
+            except Exception as e:
+                services_status["docker_environment"] = {
+                    "status": "error",
+                    "error": str(e)
+                }
+        else:
+            services_status["docker_environment"] = {
+                "status": "unavailable",
+                "error": "Docker manager not initialized"
+            }
+        
+        status["services"] = services_status
+        
+        # 检查端到端工作流程
+        workflows_status = {}
+        
+        # 工作流程1: 代码上传到容器创建
+        workflows_status["code_upload_to_container"] = await test_code_upload_workflow()
+        
+        # 工作流程2: 容器注册到撮合服务
+        workflows_status["container_to_matchmaker"] = await test_container_registration_workflow()
+        
+        # 工作流程3: 资源管理和清理
+        workflows_status["resource_management"] = test_resource_management_workflow()
+        
+        status["workflows"] = workflows_status
+        
+        # 确定整体状态
+        failed_services = [name for name, info in services_status.items() if info["status"] != "healthy"]
+        failed_workflows = [name for name, info in workflows_status.items() if info["status"] != "healthy"]
+        
+        if failed_services or failed_workflows:
+            status["overall_status"] = "degraded"
+            status["issues"] = {
+                "failed_services": failed_services,
+                "failed_workflows": failed_workflows
+            }
+        
+        return status
+        
+    except Exception as e:
+        logger.error(f"获取集成状态失败: {str(e)}", exc_info=True)
+        raise HTTPException(status_code=500, detail="获取集成状态失败")
+
+async def test_code_upload_workflow() -> Dict[str, Any]:
+    """测试代码上传到容器创建工作流程"""
+    try:
+        # 检查代码分析器
+        if not code_analyzer:
+            return {"status": "error", "error": "Code analyzer not available"}
+        
+        # 测试简单的代码分析
+        test_code = "console.log('Hello World');"
+        analysis_result = code_analyzer.analyze_code(test_code)
+        
+        if not analysis_result.is_valid:
+            return {"status": "error", "error": "Code analysis failed for valid code"}
+        
+        # 检查Docker管理器
+        if not docker_manager:
+            return {"status": "error", "error": "Docker manager not available"}
+        
+        return {"status": "healthy", "components_checked": ["code_analyzer", "docker_manager"]}
+        
+    except Exception as e:
+        return {"status": "error", "error": str(e)}
+
+async def test_container_registration_workflow() -> Dict[str, Any]:
+    """测试容器注册到撮合服务工作流程"""
+    try:
+        # 检查撮合服务连接
+        matchmaker_status = await check_matchmaker_health()
+        if matchmaker_status != "healthy":
+            return {"status": "error", "error": f"Matchmaker service not healthy: {matchmaker_status}"}
+        
+        # 检查是否有运行中的容器可以注册
+        running_containers = [s for s in game_servers.values() if s.status == "running"]
+        
+        return {
+            "status": "healthy",
+            "matchmaker_available": True,
+            "running_containers": len(running_containers)
+        }
+        
+    except Exception as e:
+        return {"status": "error", "error": str(e)}
+
+def test_resource_management_workflow() -> Dict[str, Any]:
+    """测试资源管理和清理工作流程"""
+    try:
+        if not resource_manager:
+            return {"status": "error", "error": "Resource manager not available"}
+        
+        # 获取资源统计
+        resource_stats = resource_manager.get_resource_stats()
+        
+        return {
+            "status": "healthy",
+            "resource_manager_available": True,
+            "resource_stats": resource_stats
+        }
+        
+    except Exception as e:
+        return {"status": "error", "error": str(e)}
+
+@app.get("/system/end-to-end-test")
+async def run_end_to_end_test():
+    """运行端到端系统测试"""
+    try:
+        test_results = {
+            "timestamp": datetime.now().isoformat(),
+            "test_id": f"e2e_{int(datetime.now().timestamp())}",
+            "overall_result": "passed",
+            "tests": {}
+        }
+        
+        # 测试1: 配置验证
+        config_test = test_configuration()
+        test_results["tests"]["configuration"] = config_test
+        
+        # 测试2: 服务依赖检查
+        dependency_test = await test_service_dependencies()
+        test_results["tests"]["service_dependencies"] = dependency_test
+        
+        # 测试3: API端点可用性
+        api_test = await test_api_endpoints()
+        test_results["tests"]["api_endpoints"] = api_test
+        
+        # 测试4: 错误处理
+        error_handling_test = test_error_handling()
+        test_results["tests"]["error_handling"] = error_handling_test
+        
+        # 确定整体结果
+        failed_tests = [name for name, result in test_results["tests"].items() if result["result"] != "passed"]
+        if failed_tests:
+            test_results["overall_result"] = "failed"
+            test_results["failed_tests"] = failed_tests
+        
+        return test_results
+        
+    except Exception as e:
+        logger.error(f"端到端测试失败: {str(e)}", exc_info=True)
+        raise HTTPException(status_code=500, detail="端到端测试失败")
+
+def test_configuration() -> Dict[str, Any]:
+    """测试配置验证"""
+    try:
+        config_errors = Config.validate_config()
+        if config_errors:
+            return {
+                "result": "failed",
+                "errors": config_errors
+            }
+        
+        return {
+            "result": "passed",
+            "environment": Config.ENVIRONMENT,
+            "debug_mode": Config.DEBUG
+        }
+    except Exception as e:
+        return {"result": "failed", "error": str(e)}
+
+async def test_service_dependencies() -> Dict[str, Any]:
+    """测试服务依赖"""
+    try:
+        dependencies = {}
+        
+        # 测试Docker连接
+        if docker_manager:
+            try:
+                docker_manager.get_system_stats()
+                dependencies["docker"] = "available"
+            except Exception as e:
+                dependencies["docker"] = f"error: {str(e)}"
+        else:
+            dependencies["docker"] = "unavailable"
+        
+        # 测试撮合服务连接
+        matchmaker_status = await check_matchmaker_health()
+        dependencies["matchmaker"] = matchmaker_status
+        
+        # 测试资源管理器
+        if resource_manager:
+            try:
+                resource_manager.get_resource_stats()
+                dependencies["resource_manager"] = "available"
+            except Exception as e:
+                dependencies["resource_manager"] = f"error: {str(e)}"
+        else:
+            dependencies["resource_manager"] = "unavailable"
+        
+        # 检查是否有关键依赖失败
+        critical_failures = [k for k, v in dependencies.items() if v.startswith("error")]
+        
+        return {
+            "result": "failed" if critical_failures else "passed",
+            "dependencies": dependencies,
+            "critical_failures": critical_failures
+        }
+        
+    except Exception as e:
+        return {"result": "failed", "error": str(e)}
+
+async def test_api_endpoints() -> Dict[str, Any]:
+    """测试API端点可用性"""
+    try:
+        endpoints = {}
+        
+        # 测试健康检查端点
+        try:
+            health_response = await health_check()
+            endpoints["/health"] = "available"
+        except Exception as e:
+            endpoints["/health"] = f"error: {str(e)}"
+        
+        # 测试服务器列表端点
+        try:
+            servers = await get_servers()
+            endpoints["/servers"] = "available"
+        except Exception as e:
+            endpoints["/servers"] = f"error: {str(e)}"
+        
+        # 测试系统统计端点
+        try:
+            stats = await get_system_stats()
+            endpoints["/system/stats"] = "available"
+        except Exception as e:
+            endpoints["/system/stats"] = f"error: {str(e)}"
+        
+        failed_endpoints = [k for k, v in endpoints.items() if v.startswith("error")]
+        
+        return {
+            "result": "failed" if failed_endpoints else "passed",
+            "endpoints": endpoints,
+            "failed_endpoints": failed_endpoints
+        }
+        
+    except Exception as e:
+        return {"result": "failed", "error": str(e)}
+
+def test_error_handling() -> Dict[str, Any]:
+    """测试错误处理机制"""
+    try:
+        error_tests = {}
+        
+        # 测试标准化错误响应格式
+        test_error = create_error_response(
+            status_code=400,
+            message="测试错误",
+            path="/test",
+            details={"test": True}
+        )
+        
+        required_fields = ["error"]
+        error_fields = ["code", "message", "timestamp", "path"]
+        
+        if "error" in test_error and all(field in test_error["error"] for field in error_fields):
+            error_tests["error_response_format"] = "passed"
+        else:
+            error_tests["error_response_format"] = "failed"
+        
+        # 测试日志配置
+        try:
+            logger.info("测试日志记录")
+            error_tests["logging"] = "passed"
+        except Exception as e:
+            error_tests["logging"] = f"failed: {str(e)}"
+        
+        failed_tests = [k for k, v in error_tests.items() if v.startswith("failed")]
+        
+        return {
+            "result": "failed" if failed_tests else "passed",
+            "error_tests": error_tests,
+            "failed_tests": failed_tests
+        }
+        
+    except Exception as e:
+        return {"result": "failed", "error": str(e)}
 
 @app.on_event("shutdown")
 async def shutdown_event():
