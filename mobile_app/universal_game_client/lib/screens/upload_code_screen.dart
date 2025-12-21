@@ -6,8 +6,8 @@ import '../providers/game_server_provider.dart';
 import '../services/game_server_factory_service.dart';
 import '../theme/colors.dart';
 
-/// Screen for uploading JavaScript game code to create a new game server.
-/// Supports file selection, name/description input, and upload progress.
+/// Screen for uploading HTML game files to create a new game server.
+/// Supports HTML and ZIP file selection, name/description input, and upload progress.
 class UploadCodeScreen extends StatefulWidget {
   const UploadCodeScreen({super.key});
 
@@ -34,7 +34,7 @@ class _UploadCodeScreenState extends State<UploadCodeScreen> {
     try {
       final result = await FilePicker.platform.pickFiles(
         type: FileType.custom,
-        allowedExtensions: ['js'],
+        allowedExtensions: ['html', 'zip'],
         allowMultiple: false,
       );
 
@@ -45,7 +45,13 @@ class _UploadCodeScreenState extends State<UploadCodeScreen> {
           
           // Auto-fill name from filename if empty
           if (_nameController.text.isEmpty && _selectedFile!.name.isNotEmpty) {
-            _nameController.text = _selectedFile!.name.replaceAll('.js', '');
+            String baseName = _selectedFile!.name;
+            if (baseName.toLowerCase().endsWith('.html')) {
+              baseName = baseName.replaceAll('.html', '');
+            } else if (baseName.toLowerCase().endsWith('.zip')) {
+              baseName = baseName.replaceAll('.zip', '');
+            }
+            _nameController.text = baseName;
           }
         });
       }
@@ -55,15 +61,19 @@ class _UploadCodeScreenState extends State<UploadCodeScreen> {
   }
 
   bool _validateFile(PlatformFile file) {
+    final fileName = file.name.toLowerCase();
+    
     // Check file extension
-    if (!file.name.toLowerCase().endsWith('.js')) {
-      _showError('Only JavaScript (.js) files are allowed');
+    if (!fileName.endsWith('.html') && !fileName.endsWith('.zip')) {
+      _showError('Only HTML (.html) and ZIP (.zip) files are allowed');
       return false;
     }
     
-    // Check file size (max 1MB)
-    if (file.size > 1024 * 1024) {
-      _showError('File size must be less than 1MB');
+    // Check file size (max 10MB for ZIP files, 1MB for HTML files)
+    final maxSize = fileName.endsWith('.zip') ? 10 * 1024 * 1024 : 1024 * 1024;
+    if (file.size > maxSize) {
+      final maxSizeStr = fileName.endsWith('.zip') ? '10MB' : '1MB';
+      _showError('File size must be less than $maxSizeStr');
       return false;
     }
     
@@ -82,7 +92,7 @@ class _UploadCodeScreenState extends State<UploadCodeScreen> {
   Future<void> _uploadCode() async {
     if (!_formKey.currentState!.validate()) return;
     if (_selectedFile == null || !_isValidFile) {
-      _showError('Please select a valid JavaScript file');
+      _showError('Please select a valid HTML or ZIP file');
       return;
     }
 
@@ -100,7 +110,7 @@ class _UploadCodeScreenState extends State<UploadCodeScreen> {
       final file = File(filePath);
       
       // Upload the code
-      final server = await GameServerFactoryService.uploadGameCode(
+      final server = await GameServerFactoryService.uploadHtmlGame(
         file: file,
         name: _nameController.text.trim(),
         description: _descriptionController.text.trim(),
@@ -141,7 +151,7 @@ class _UploadCodeScreenState extends State<UploadCodeScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Upload Game Code'),
+        title: const Text('Upload HTML Game'),
       ),
       body: Consumer<GameServerProvider>(
         builder: (context, provider, child) {
@@ -248,9 +258,9 @@ class _UploadCodeScreenState extends State<UploadCodeScreen> {
                             ],
                           ),
                           const SizedBox(height: 8),
-                          const Text('• JavaScript file (.js) only'),
-                          const Text('• Maximum file size: 1MB'),
-                          const Text('• Code will be analyzed for security'),
+                          const Text('• HTML (.html) or ZIP (.zip) files only'),
+                          const Text('• Maximum file size: 1MB for HTML, 10MB for ZIP'),
+                          const Text('• Files will be analyzed for security'),
                         ],
                       ),
                     ),
@@ -313,7 +323,7 @@ class _FilePickerSection extends StatelessWidget {
             Text(
               selectedFile != null
                   ? selectedFile!.name
-                  : 'Tap to select JavaScript file',
+                  : 'Tap to select HTML or ZIP file',
               style: TextStyle(
                 fontSize: 16,
                 fontWeight: selectedFile != null ? FontWeight.bold : FontWeight.normal,

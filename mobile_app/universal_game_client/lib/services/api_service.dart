@@ -22,14 +22,30 @@ class ApiService {
 
   // ============ Game Server Factory Methods ============
 
-  /// Uploads a JavaScript game code file to create a new game server.
+  /// Uploads an HTML game file to create a new game server.
+  static Future<GameServerInstance> uploadHtmlGame({
+    required File file,
+    required String name,
+    String description = '',
+    int maxPlayers = 10,
+    void Function(double progress)? onProgress,
+  }) => GameServerFactoryService.uploadHtmlGame(
+    file: file,
+    name: name,
+    description: description,
+    maxPlayers: maxPlayers,
+    onProgress: onProgress,
+  );
+
+  /// Legacy method name for backward compatibility
+  @Deprecated('Use uploadHtmlGame instead')
   static Future<GameServerInstance> uploadGameCode({
     required File file,
     required String name,
     String description = '',
     int maxPlayers = 10,
     void Function(double progress)? onProgress,
-  }) => GameServerFactoryService.uploadGameCode(
+  }) => uploadHtmlGame(
     file: file,
     name: name,
     description: description,
@@ -60,6 +76,33 @@ class ApiService {
   /// Checks the health status of the Game Server Factory service.
   static Future<Map<String, dynamic>> checkFactoryHealth() =>
       GameServerFactoryService.checkHealth();
+
+  // ============ Real-time Status Update Methods ============
+
+  /// Creates a stream that periodically fetches server status updates.
+  /// This enables real-time status monitoring for the UI.
+  static Stream<GameServerInstance> watchServerStatus(
+    String serverId, {
+    Duration interval = const Duration(seconds: 5),
+  }) => GameServerFactoryService.watchServerStatus(serverId, interval: interval);
+
+  /// Creates a stream that periodically fetches all user servers.
+  /// This enables real-time monitoring of all servers in the UI.
+  static Stream<List<GameServerInstance>> watchAllServers({
+    Duration interval = const Duration(seconds: 10),
+  }) => GameServerFactoryService.watchAllServers(interval: interval);
+
+  /// Creates a stream that periodically fetches room list updates.
+  /// This enables real-time room discovery in the UI.
+  static Stream<List<Room>> watchRooms({
+    Duration interval = const Duration(seconds: 30),
+  }) => MatchmakerService.watchRooms(interval: interval);
+
+  /// Creates a stream that monitors a specific room for updates.
+  static Stream<Room> watchRoom(
+    String roomId, {
+    Duration interval = const Duration(seconds: 10),
+  }) => MatchmakerService.watchRoom(roomId, interval: interval);
 
   // ============ Legacy Methods (for backward compatibility) ============
 

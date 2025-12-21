@@ -26,18 +26,40 @@ class GameServerInstance {
   });
 
   factory GameServerInstance.fromJson(Map<String, dynamic> json) {
+    // 安全地提取字段，确保类型正确
+    final description = json['description'];
+    final containerId = json['container_id'];
+    
     return GameServerInstance(
-      serverId: json['server_id'] as String,
-      name: json['name'] as String,
-      description: json['description'] as String? ?? '',
-      status: json['status'] as String,
-      containerId: json['container_id'] as String? ?? '',
-      port: json['port'] as int,
-      createdAt: DateTime.parse(json['created_at'] as String),
-      updatedAt: DateTime.parse(json['updated_at'] as String),
-      resourceUsage: json['resource_usage'] as Map<String, dynamic>? ?? {},
-      logs: (json['logs'] as List<dynamic>?)?.cast<String>() ?? [],
+      serverId: (json['server_id'] ?? '').toString(),
+      name: (json['name'] ?? '').toString(),
+      description: description is String ? description : (description?.toString() ?? ''),
+      status: (json['status'] ?? 'unknown').toString(),
+      containerId: containerId is String ? containerId : (containerId?.toString() ?? ''),
+      port: (json['port'] as int?) ?? 0,
+      createdAt: _parseDateTime(json['created_at']),
+      updatedAt: _parseDateTime(json['updated_at']),
+      resourceUsage: (json['resource_usage'] as Map<String, dynamic>?) ?? {},
+      logs: _parseLogsList(json['logs']),
     );
+  }
+
+  static DateTime _parseDateTime(dynamic value) {
+    if (value is String) {
+      try {
+        return DateTime.parse(value);
+      } catch (e) {
+        return DateTime.now();
+      }
+    }
+    return DateTime.now();
+  }
+
+  static List<String> _parseLogsList(dynamic value) {
+    if (value is List) {
+      return value.whereType<String>().toList();
+    }
+    return [];
   }
 
   Map<String, dynamic> toJson() {

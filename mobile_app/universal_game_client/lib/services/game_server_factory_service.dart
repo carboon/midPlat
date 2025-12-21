@@ -34,12 +34,13 @@ class ApiException implements Exception {
 class GameServerFactoryService {
   static String get _baseUrl => Constants.gameServerFactoryUrl;
 
-  /// Uploads a JavaScript game code file to the Game Server Factory.
+  /// Uploads game code (JavaScript or HTML) to the Game Server Factory.
   /// Returns the created GameServerInstance on success.
   /// 
-  /// [file] - The JavaScript file to upload
+  /// [file] - The game file (JS, HTML, or ZIP) to upload
   /// [name] - Name for the game server
   /// [description] - Description of the game
+  /// [maxPlayers] - Maximum number of players for the game
   /// [onProgress] - Optional callback for upload progress (0.0 to 1.0)
   static Future<GameServerInstance> uploadGameCode({
     required File file,
@@ -48,6 +49,38 @@ class GameServerFactoryService {
     int maxPlayers = 10,
     void Function(double progress)? onProgress,
   }) async {
+    return uploadHtmlGame(
+      file: file,
+      name: name,
+      description: description,
+      maxPlayers: maxPlayers,
+      onProgress: onProgress,
+    );
+  }
+
+  /// Uploads an HTML game file to the Game Server Factory.
+  /// Returns the created GameServerInstance on success.
+  /// 
+  /// [file] - The HTML game file (ZIP or single HTML) to upload
+  /// [name] - Name for the game server
+  /// [description] - Description of the game
+  /// [maxPlayers] - Maximum number of players for the game
+  /// [onProgress] - Optional callback for upload progress (0.0 to 1.0)
+  static Future<GameServerInstance> uploadHtmlGame({
+    required File file,
+    required String name,
+    String description = '',
+    int maxPlayers = 10,
+    void Function(double progress)? onProgress,
+  }) async {
+    // Validate file type (HTML, JS or ZIP)
+    final fileName = file.path.toLowerCase();
+    if (!fileName.endsWith('.html') && !fileName.endsWith('.zip') && !fileName.endsWith('.js')) {
+      throw NetworkException(
+        '不支持的文件格式。请上传HTML文件、JavaScript文件或ZIP压缩包',
+      );
+    }
+
     // Validate file size
     final fileSize = await file.length();
     if (fileSize > Constants.maxFileSizeBytes) {
@@ -74,17 +107,45 @@ class GameServerFactoryService {
         onTimeout: () => throw NetworkException('上传超时，请检查网络连接'),
       );
 
-      // Simulate progress for now (actual progress tracking requires custom implementation)
-      onProgress?.call(0.5);
-
-      final response = await http.Response.fromStream(streamedResponse);
-      onProgress?.call(1.0);
-
-      if (response.statusCode == 200 || response.statusCode == 201) {
-        final data = json.decode(response.body) as Map<String, dynamic>;
-        return GameServerInstance.fromJson(data);
+      // Track upload progress if callback provided
+      if (onProgress != null) {
+        onProgress(0.3); // Request sent
+        
+        // Listen to response stream for progress updates
+        final responseBytes = <int>[];
+        final contentLength = streamedResponse.contentLength ?? 0;
+        int receivedBytes = 0;
+        
+        await for (final chunk in streamedResponse.stream) {
+          responseBytes.addAll(chunk);
+          receivedBytes += chunk.length;
+          
+          if (contentLength > 0) {
+            final progress = 0.3 + (receivedBytes / contentLength) * 0.7;
+            onProgress(progress.clamp(0.3, 1.0));
+          }
+        }
+        
+        final response = http.Response.bytes(responseBytes, streamedResponse.statusCode,
+            headers: streamedResponse.headers);
+        onProgress(1.0);
+        
+        if (response.statusCode == 200 || response.statusCode == 201) {
+          final data = json.decode(response.body) as Map<String, dynamic>;
+          return GameServerInstance.fromJson(data);
+        } else {
+          throw _handleErrorResponse(response);
+        }
       } else {
-        throw _handleErrorResponse(response);
+        // Simple response handling without progress tracking
+        final response = await http.Response.fromStream(streamedResponse);
+        
+        if (response.statusCode == 200 || response.statusCode == 201) {
+          final data = json.decode(response.body) as Map<String, dynamic>;
+          return GameServerInstance.fromJson(data);
+        } else {
+          throw _handleErrorResponse(response);
+        }
       }
     });
   }
@@ -200,6 +261,53 @@ class GameServerFactoryService {
     }
   }
 
+  /// Creates a stream that periodically fetches server status updates.
+  /// This enables real-time status monitoring for the UI.
+  /// 
+  /// [serverId] - The server ID to monitor
+  /// [interval] - How often to check for updates (default: 5 seconds)
+  static Stream<GameServerInstance> watchServerStatus(
+    String serverId, {
+    Duration interval = const Duration(seconds: 5),
+  }) async* {
+    while (true) {
+      try {
+        final server = await fetchServerDetails(serverId);
+        yield server;
+        
+        // Stop polling if server is in a terminal state
+        if (server.status == 'stopped' || server.status == 'error') {
+          break;
+        }
+        
+        await Future.delayed(interval);
+      } catch (e) {
+        // If we can't fetch the server, it might be deleted or there's a network issue
+        // We'll continue trying for a few more attempts before giving up
+        await Future.delayed(interval);
+      }
+    }
+  }
+
+  /// Creates a stream that periodically fetches all user servers.
+  /// This enables real-time monitoring of all servers in the UI.
+  /// 
+  /// [interval] - How often to refresh the list (default: 10 seconds)
+  static Stream<List<GameServerInstance>> watchAllServers({
+    Duration interval = const Duration(seconds: 10),
+  }) async* {
+    while (true) {
+      try {
+        final servers = await fetchMyServers();
+        yield servers;
+        await Future.delayed(interval);
+      } catch (e) {
+        // Continue trying even if there's an error
+        await Future.delayed(interval);
+      }
+    }
+  }
+
 
   /// Handles error responses and converts them to appropriate exceptions.
   static Exception _handleErrorResponse(http.Response response) {
@@ -236,33 +344,49 @@ class GameServerFactoryService {
   /// Executes a request with retry logic for transient failures.
   static Future<T> _withRetry<T>(Future<T> Function() request) async {
     int attempts = 0;
+    Exception? lastException;
     
-    while (true) {
+    while (attempts < Constants.maxRetries) {
       try {
         return await request();
       } on SocketException catch (e) {
+        lastException = NetworkException('网络连接失败，请检查网络设置', details: e.message);
         attempts++;
-        if (attempts >= Constants.maxRetries) {
-          throw NetworkException('网络连接失败，请检查网络设置', details: e.message);
-        }
-        await Future.delayed(Constants.retryDelay * attempts);
+        if (attempts >= Constants.maxRetries) break;
+        
+        // Exponential backoff with jitter
+        final delay = Constants.retryDelay * attempts;
+        final jitter = Duration(milliseconds: (delay.inMilliseconds * 0.1).round());
+        await Future.delayed(delay + jitter);
       } on TimeoutException {
+        lastException = NetworkException('请求超时，请稍后重试');
         attempts++;
-        if (attempts >= Constants.maxRetries) {
-          throw NetworkException('请求超时，请稍后重试');
-        }
+        if (attempts >= Constants.maxRetries) break;
+        
         await Future.delayed(Constants.retryDelay * attempts);
+      } on HttpException catch (e) {
+        lastException = NetworkException('HTTP错误: ${e.message}');
+        attempts++;
+        if (attempts >= Constants.maxRetries) break;
+        
+        await Future.delayed(Constants.retryDelay * attempts);
+      } on FormatException catch (e) {
+        // Don't retry format exceptions - they won't succeed on retry
+        throw NetworkException('响应格式错误: ${e.message}');
       } on ApiException {
-        rethrow; // Don't retry API errors
+        rethrow; // Don't retry API errors - they're usually permanent
       } on NetworkException {
         rethrow; // Don't retry network exceptions we've already created
       } catch (e) {
+        lastException = NetworkException('请求失败: ${e.toString()}');
         attempts++;
-        if (attempts >= Constants.maxRetries) {
-          throw NetworkException('请求失败: ${e.toString()}');
-        }
+        if (attempts >= Constants.maxRetries) break;
+        
         await Future.delayed(Constants.retryDelay * attempts);
       }
     }
+    
+    // If we've exhausted all retries, throw the last exception
+    throw lastException ?? NetworkException('请求失败，已达到最大重试次数');
   }
 }

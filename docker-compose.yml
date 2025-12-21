@@ -1,5 +1,4 @@
 # 增强的Docker Compose配置 - 需求 7.1, 7.2, 7.4, 7.5
-version: '3.8'
 
 services:
   # 撮合服务
@@ -43,6 +42,7 @@ services:
       dockerfile: Dockerfile
     ports:
       - "${FACTORY_PORT:-8080}:8080"
+      # 动态容器将自己管理端口映射
     environment:
       - PYTHONUNBUFFERED=1
       - HOST=0.0.0.0
@@ -52,7 +52,7 @@ services:
       - MAX_FILE_SIZE=${MAX_FILE_SIZE:-1048576}
       - MAX_CONTAINERS=${MAX_CONTAINERS:-50}
       - DOCKER_NETWORK=game-network
-      - BASE_PORT=${BASE_PORT:-8081}
+      - BASE_PORT=${BASE_PORT:-8082}
       - MATCHMAKER_URL=http://matchmaker:8000
       - IDLE_TIMEOUT_SECONDS=${IDLE_TIMEOUT_SECONDS:-1800}
       - CLEANUP_INTERVAL_SECONDS=${CLEANUP_INTERVAL_SECONDS:-300}
@@ -60,6 +60,11 @@ services:
       - ALLOWED_ORIGINS=${ALLOWED_ORIGINS:-*}
       - CONTAINER_MEMORY_LIMIT=${CONTAINER_MEMORY_LIMIT:-512m}
       - CONTAINER_CPU_LIMIT=${CONTAINER_CPU_LIMIT:-1.0}
+      # 动态容器网络配置
+      - ENABLE_DYNAMIC_NETWORKING=${ENABLE_DYNAMIC_NETWORKING:-true}
+      - CONTAINER_NETWORK_MODE=${CONTAINER_NETWORK_MODE:-game-network}
+      # Docker连接配置
+      - DOCKER_HOST=unix:///var/run/docker.sock
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock  # Docker socket for container management
       - factory_logs:/app/logs
@@ -81,6 +86,11 @@ services:
       options:
         max-size: "10m"
         max-file: "3"
+    # 特权模式用于Docker容器管理
+    privileged: false
+    # 添加必要的capabilities
+    cap_add:
+      - NET_ADMIN
 
   # 示例游戏服务器（可选）
   example-game-server:
@@ -113,10 +123,8 @@ services:
 
 networks:
   game-network:
-    driver: bridge
-    ipam:
-      config:
-        - subnet: 172.20.0.0/16
+    external: true
+    name: game-network
 
 volumes:
   matchmaker_logs:

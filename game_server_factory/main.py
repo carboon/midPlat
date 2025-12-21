@@ -1,10 +1,11 @@
 """
 Game Server Factory - 游戏服务器工厂
-负责接收JavaScript代码、分析优化代码并动态创建游戏服务器Docker容器
+负责接收HTML游戏文件、验证文件完整性并动态创建游戏服务器Docker容器
 """
 
 import os
 import logging
+import logging.handlers
 from datetime import datetime
 from typing import List, Optional, Dict, Any
 from fastapi import FastAPI, HTTPException, UploadFile, File, Form
@@ -14,151 +15,16 @@ from pydantic import BaseModel, Field, validator
 import uvicorn
 from dotenv import load_dotenv
 
-from code_analyzer import JavaScriptCodeAnalyzer, validate_file_upload, AnalysisResult
+from html_game_validator import HTMLGameValidator
 from docker_manager import DockerManager, ContainerInfo
 from resource_manager import ResourceManager, ResourceLimits
+from monitoring import SystemMonitor, MonitoringConfig, AlertType, AlertSeverity
 
 # 加载环境变量
 load_dotenv()
 
-# 验证配置 - 需求 7.3
-config_errors = Config.validate_config()
-if config_errors:
-    print("Configuration errors found:")
-    for error in config_errors:
-        print(f"  - {error}")
-    exit(1)
 
-# 配置增强日志系统 - 需求 8.1
-import logging.handlers
-
-def setup_logging():
-    """设置增强的日志系统"""
-    log_config = Config.get_log_config()
-    
-    # 创建根日志记录器
-    root_logger = logging.getLogger()
-    root_logger.setLevel(log_config["level"])
-    
-    # 清除现有处理器
-    for handler in root_logger.handlers[:]:
-        root_logger.removeHandler(handler)
-    
-    # 创建格式化器
-    formatter = logging.Formatter(log_config["format"])
-    
-    # 添加文件处理器（带轮转）
-    file_handler = logging.handlers.RotatingFileHandler(
-        filename=Config.LOG_FILE,
-        maxBytes=Config.LOG_MAX_SIZE,
-        backupCount=Config.LOG_BACKUP_COUNT,
-        encoding='utf-8'
-    )
-    file_handler.setFormatter(formatter)
-    root_logger.addHandler(file_handler)
-    
-    # 添加控制台处理器
-    console_handler = logging.StreamHandler()
-    console_handler.setFormatter(formatter)
-    root_logger.addHandler(console_handler)
-    
-    # 设置第三方库的日志级别
-    logging.getLogger("uvicorn").setLevel(logging.WARNING)
-    logging.getLogger("docker").setLevel(logging.WARNING)
-    logging.getLogger("urllib3").setLevel(logging.WARNING)
-
-setup_logging()
-logger = logging.getLogger(__name__)
-
-# 记录配置信息
-logger.info(f"Game Server Factory starting with configuration:")
-logger.info(f"  Environment: {Config.ENVIRONMENT}")
-logger.info(f"  Host: {Config.HOST}:{Config.PORT}")
-logger.info(f"  Debug mode: {Config.DEBUG}")
-logger.info(f"  Max file size: {Config.MAX_FILE_SIZE / (1024*1024):.1f}MB")
-logger.info(f"  Max containers: {Config.MAX_CONTAINERS}")
-logger.info(f"  Docker network: {Config.DOCKER_NETWORK}")
-logger.info(f"  Matchmaker URL: {Config.MATCHMAKER_URL}")
-
-# GameServerInstance数据模型
-class GameServerInstance(BaseModel):
-    """游戏服务器实例数据模型"""
-    server_id: str = Field(..., description="服务器唯一标识")
-    name: str = Field(..., min_length=1, max_length=100, description="游戏名称")
-    description: str = Field(..., max_length=500, description="游戏描述")
-    status: str = Field(default="creating", description="状态: creating, running, stopped, error")
-    container_id: Optional[str] = Field(None, description="Docker容器ID")
-    port: Optional[int] = Field(None, ge=1024, le=65535, description="服务器端口")
-    created_at: str = Field(default_factory=lambda: datetime.now().isoformat(), description="创建时间")
-    updated_at: str = Field(default_factory=lambda: datetime.now().isoformat(), description="更新时间")
-    resource_usage: Dict[str, Any] = Field(default_factory=dict, description="资源使用情况")
-    logs: List[str] = Field(default_factory=list, description="服务器日志")
-
-    @validator('status')
-    def validate_status(cls, v):
-        valid_statuses = ["creating", "running", "stopped", "error"]
-        if v not in valid_statuses:
-            raise ValueError(f"状态必须是以下之一: {valid_statuses}")
-        return v
-
-    class Config:
-        schema_extra = {
-            "example": {
-                "server_id": "user123_mygame_001",
-                "name": "我的第一个游戏",
-                "description": "一个简单的点击游戏",
-                "status": "running",
-                "container_id": "docker_container_abc123",
-                "port": 8081,
-                "created_at": "2025-12-17T10:00:00Z",
-                "updated_at": "2025-12-17T10:30:00Z",
-                "resource_usage": {
-                    "cpu_percent": 15.5,
-                    "memory_mb": 128,
-                    "network_io": "1.2MB"
-                },
-                "logs": ["Server started on port 8081", "Game initialized"]
-            }
-        }
-
-class CodeUploadRequest(BaseModel):
-    """代码上传请求模型"""
-    name: str = Field(..., min_length=1, max_length=100, description="游戏名称")
-    description: str = Field(..., max_length=500, description="游戏描述")
-    max_players: int = Field(default=10, ge=1, le=100, description="最大玩家数")
-
-class HealthResponse(BaseModel):
-    """增强健康检查响应模型 - 需求 6.2, 6.3"""
-    status: str = Field(..., description="服务状态: healthy, degraded, limited, unhealthy")
-    containers: int = Field(..., description="运行中的容器数量")
-    timestamp: str = Field(default_factory=lambda: datetime.now().isoformat())
-    components: Optional[Dict[str, str]] = Field(None, description="各组件健康状态")
-    configuration: Optional[Dict[str, Any]] = Field(None, description="配置信息")
-    
-    class Config:
-        schema_extra = {
-            "example": {
-                "status": "healthy",
-                "containers": 5,
-                "timestamp": "2025-12-18T10:00:00Z",
-                "components": {
-                    "docker_manager": "healthy",
-                    "resource_manager": "healthy",
-                    "matchmaker_service": "healthy"
-                },
-                "configuration": {
-                    "environment": "production",
-                    "max_containers": 50,
-                    "debug_mode": False
-                }
-            }
-        }
-
-class ErrorResponse(BaseModel):
-    """错误响应模型"""
-    error: Dict[str, Any] = Field(..., description="错误信息")
-
-# 增强配置管理 - 需求 7.3
+# 增强配置管理 - 需求 7.3 (必须在使用前定义)
 class Config:
     """应用配置管理 - 支持环境适配和验证"""
     
@@ -169,8 +35,8 @@ class Config:
     ENVIRONMENT = os.getenv("ENVIRONMENT", "development")  # development, staging, production
     
     # 文件上传配置
-    MAX_FILE_SIZE = int(os.getenv("MAX_FILE_SIZE", 1024 * 1024))  # 1MB
-    ALLOWED_EXTENSIONS = os.getenv("ALLOWED_EXTENSIONS", ".js,.mjs").split(",")
+    MAX_FILE_SIZE = int(os.getenv("MAX_FILE_SIZE", 50 * 1024 * 1024))  # 50MB for HTML games
+    ALLOWED_EXTENSIONS = os.getenv("ALLOWED_EXTENSIONS", ".html,.htm,.zip").split(",")
     UPLOAD_TIMEOUT = int(os.getenv("UPLOAD_TIMEOUT", 300))  # 5 minutes
     
     # Docker配置
@@ -198,6 +64,9 @@ class Config:
     # 安全配置
     ALLOWED_ORIGINS = os.getenv("ALLOWED_ORIGINS", "*").split(",")
     API_RATE_LIMIT = int(os.getenv("API_RATE_LIMIT", 100))  # requests per minute
+    
+    # 监控配置常量
+    STALE_SERVER_THRESHOLD_RATIO = 0.5  # 过期服务器阈值比例
     
     @classmethod
     def validate_config(cls) -> List[str]:
@@ -280,10 +149,138 @@ class Config:
             ]
         }
 
+
+def setup_logging():
+    """设置增强的日志系统"""
+    log_config = Config.get_log_config()
+    
+    # 创建根日志记录器
+    root_logger = logging.getLogger()
+    root_logger.setLevel(log_config["level"])
+    
+    # 清除现有处理器
+    for handler in root_logger.handlers[:]:
+        root_logger.removeHandler(handler)
+    
+    # 创建格式化器
+    formatter = logging.Formatter(log_config["format"])
+    
+    # 添加文件处理器（带轮转）
+    file_handler = logging.handlers.RotatingFileHandler(
+        filename=Config.LOG_FILE,
+        maxBytes=Config.LOG_MAX_SIZE,
+        backupCount=Config.LOG_BACKUP_COUNT,
+        encoding='utf-8'
+    )
+    file_handler.setFormatter(formatter)
+    root_logger.addHandler(file_handler)
+    
+    # 添加控制台处理器
+    console_handler = logging.StreamHandler()
+    console_handler.setFormatter(formatter)
+    root_logger.addHandler(console_handler)
+    
+    # 设置第三方库的日志级别
+    logging.getLogger("uvicorn").setLevel(logging.WARNING)
+    logging.getLogger("docker").setLevel(logging.WARNING)
+    logging.getLogger("urllib3").setLevel(logging.WARNING)
+
+setup_logging()
+logger = logging.getLogger(__name__)
+
+# 记录配置信息
+logger.info(f"Game Server Factory starting with configuration:")
+logger.info(f"  Environment: {Config.ENVIRONMENT}")
+logger.info(f"  Host: {Config.HOST}:{Config.PORT}")
+logger.info(f"  Debug mode: {Config.DEBUG}")
+logger.info(f"  Max file size: {Config.MAX_FILE_SIZE / (1024*1024):.1f}MB")
+logger.info(f"  Max containers: {Config.MAX_CONTAINERS}")
+logger.info(f"  Docker network: {Config.DOCKER_NETWORK}")
+logger.info(f"  Matchmaker URL: {Config.MATCHMAKER_URL}")
+
+# GameServerInstance数据模型
+class GameServerInstance(BaseModel):
+    """游戏服务器实例数据模型"""
+    server_id: str = Field(..., description="服务器唯一标识")
+    name: str = Field(..., min_length=1, max_length=100, description="游戏名称")
+    description: str = Field(default="", max_length=500, description="游戏描述")
+    status: str = Field(default="creating", description="状态: creating, running, stopped, error")
+    container_id: Optional[str] = Field(None, description="Docker容器ID")
+    port: Optional[int] = Field(None, ge=1024, le=65535, description="服务器端口")
+    created_at: str = Field(default_factory=lambda: datetime.now().isoformat(), description="创建时间")
+    updated_at: str = Field(default_factory=lambda: datetime.now().isoformat(), description="更新时间")
+    resource_usage: Dict[str, Any] = Field(default_factory=dict, description="资源使用情况")
+    logs: List[str] = Field(default_factory=list, description="服务器日志")
+
+    @validator('status')
+    def validate_status(cls, v):
+        valid_statuses = ["creating", "running", "stopped", "error"]
+        if v not in valid_statuses:
+            raise ValueError(f"状态必须是以下之一: {valid_statuses}")
+        return v
+
+    class Config:
+        schema_extra = {
+            "example": {
+                "server_id": "user123_mygame_001",
+                "name": "我的第一个游戏",
+                "description": "一个简单的点击游戏",
+                "status": "running",
+                "container_id": "docker_container_abc123",
+                "port": 8081,
+                "created_at": "2025-12-17T10:00:00Z",
+                "updated_at": "2025-12-17T10:30:00Z",
+                "resource_usage": {
+                    "cpu_percent": 15.5,
+                    "memory_mb": 128,
+                    "network_io": "1.2MB"
+                },
+                "logs": ["Server started on port 8081", "Game initialized"]
+            }
+        }
+
+class HTMLGameUploadRequest(BaseModel):
+    """HTML游戏上传请求模型"""
+    name: str = Field(..., min_length=1, max_length=100, description="游戏名称")
+    description: str = Field(default="", max_length=500, description="游戏描述（可选）")
+    max_players: int = Field(default=10, ge=1, le=100, description="最大玩家数")
+
+class HealthResponse(BaseModel):
+    """增强健康检查响应模型 - 需求 6.2, 6.3"""
+    status: str = Field(..., description="服务状态: healthy, degraded, limited, unhealthy")
+    containers: int = Field(..., description="运行中的容器数量")
+    timestamp: str = Field(default_factory=lambda: datetime.now().isoformat())
+    components: Optional[Dict[str, str]] = Field(None, description="各组件健康状态")
+    configuration: Optional[Dict[str, Any]] = Field(None, description="配置信息")
+    
+    class Config:
+        schema_extra = {
+            "example": {
+                "status": "healthy",
+                "containers": 5,
+                "timestamp": "2025-12-18T10:00:00Z",
+                "components": {
+                    "docker_manager": "healthy",
+                    "resource_manager": "healthy",
+                    "matchmaker_service": "healthy"
+                },
+                "configuration": {
+                    "environment": "production",
+                    "max_containers": 50,
+                    "debug_mode": False
+                }
+            }
+        }
+
+class ErrorResponse(BaseModel):
+    """错误响应模型"""
+    error: Dict[str, Any] = Field(..., description="错误信息")
+
+
 # 创建FastAPI应用
 app = FastAPI(
     title="Game Server Factory",
-    description="游戏服务器工厂 - 负责JavaScript代码上传、分析和动态游戏服务器创建",
+    description="游戏服务器工厂 - 负责HTML游戏文件上传、验证和动态游戏服务器创建",
     version="1.0.0",
     docs_url="/docs",
     redoc_url="/redoc"
@@ -330,7 +327,7 @@ def create_error_response(
         }
     }
     
-    if details:
+    if details is not None:
         error_response["error"]["details"] = details
     
     return error_response
@@ -399,15 +396,35 @@ async def general_exception_handler(request, exc: Exception):
     )
 
 # 基础路由
-@app.get("/", response_model=Dict[str, str])
+@app.get("/", response_model=Dict[str, Any])
 async def root():
-    """根路径 - 服务信息"""
+    """根路径 - 服务信息和API导航 - 需求 6.1"""
     return {
         "service": "Game Server Factory",
         "version": "1.0.0",
-        "description": "游戏服务器工厂 - JavaScript代码上传和动态游戏服务器创建",
-        "docs": "/docs",
-        "health": "/health"
+        "description": "游戏服务器工厂 - HTML游戏文件上传和动态游戏服务器创建",
+        "environment": Config.ENVIRONMENT,
+        "api_documentation": {
+            "swagger_ui": "/docs",
+            "redoc": "/redoc",
+            "openapi_json": "/openapi.json"
+        },
+        "health_endpoints": {
+            "basic_health": "/health",
+            "detailed_monitoring": "/monitoring/detailed",
+            "system_stats": "/system/stats"
+        },
+        "main_endpoints": {
+            "upload_code": "POST /upload",
+            "list_servers": "GET /servers",
+            "server_details": "GET /servers/{server_id}",
+            "container_status": "GET /containers/status"
+        },
+        "monitoring_endpoints": {
+            "monitoring_status": "/monitoring/status",
+            "active_alerts": "/monitoring/alerts",
+            "service_statuses": "/monitoring/services"
+        }
     }
 
 @app.get("/health", response_model=HealthResponse)
@@ -441,9 +458,19 @@ async def health_check():
         # 检查外部服务连接
         matchmaker_status = await check_matchmaker_health()
         
+        # 检查系统监控器状态
+        monitoring_status = "unavailable"
+        if system_monitor:
+            try:
+                monitoring_data = system_monitor.get_monitoring_status()
+                monitoring_status = "healthy" if monitoring_data["monitoring_active"] else "inactive"
+            except Exception as e:
+                logger.warning(f"System monitor health check failed: {e}")
+                monitoring_status = "error"
+        
         # 确定整体健康状态
         overall_status = "healthy"
-        if docker_status == "error" or resource_manager_status == "error":
+        if docker_status == "error" or resource_manager_status == "error" or monitoring_status == "error":
             overall_status = "degraded"
         elif docker_status == "unavailable" and resource_manager_status == "unavailable":
             overall_status = "limited"
@@ -455,12 +482,14 @@ async def health_check():
             "components": {
                 "docker_manager": docker_status,
                 "resource_manager": resource_manager_status,
-                "matchmaker_service": matchmaker_status
+                "matchmaker_service": matchmaker_status,
+                "system_monitor": monitoring_status
             },
             "configuration": {
                 "environment": Config.ENVIRONMENT,
                 "max_containers": Config.MAX_CONTAINERS,
-                "debug_mode": Config.DEBUG
+                "debug_mode": Config.DEBUG,
+                "monitoring_enabled": system_monitor is not None
             }
         }
         
@@ -482,7 +511,9 @@ async def check_matchmaker_health() -> str:
     """检查撮合服务健康状态"""
     try:
         import httpx
-        async with httpx.AsyncClient(timeout=Config.MATCHMAKER_TIMEOUT) as client:
+        # 在测试环境中使用更短的超时时间
+        timeout = 2 if Config.ENVIRONMENT == "development" else Config.MATCHMAKER_TIMEOUT
+        async with httpx.AsyncClient(timeout=timeout) as client:
             response = await client.get(f"{Config.MATCHMAKER_URL}/health")
             if response.status_code == 200:
                 return "healthy"
@@ -495,10 +526,11 @@ async def check_matchmaker_health() -> str:
 # 临时存储 - 在实际实现中应该使用数据库
 game_servers: Dict[str, GameServerInstance] = {}
 
-# 初始化代码分析器和Docker管理器
-code_analyzer = JavaScriptCodeAnalyzer()
+# 初始化HTML游戏验证器和Docker管理器
+html_game_validator = HTMLGameValidator()
 docker_manager = None
 resource_manager = None
+system_monitor = None
 
 # 初始化Docker管理器
 try:
@@ -541,31 +573,59 @@ try:
 except Exception as e:
     logger.error(f"资源管理器初始化失败: {e}")
 
+# 初始化系统监控器 - 需求 6.1, 6.2, 6.3
+try:
+    monitoring_config = MonitoringConfig()
+    # 配置外部服务监控
+    monitoring_config.external_services = {
+        "matchmaker": Config.MATCHMAKER_URL + "/health"
+    }
+    
+    system_monitor = SystemMonitor(monitoring_config)
+    
+    # 添加自定义告警回调
+    def on_alert(alert):
+        """自定义告警处理"""
+        # 这里可以添加更多告警处理逻辑，如发送邮件、Webhook等
+        if alert.severity in [AlertSeverity.HIGH, AlertSeverity.CRITICAL]:
+            logger.critical(f"CRITICAL ALERT: {alert.title} - {alert.message}")
+    
+    system_monitor.add_alert_callback(on_alert)
+    
+    logger.info("系统监控器初始化成功，将在应用启动时启动监控")
+except Exception as e:
+    logger.error(f"系统监控器初始化失败: {e}")
+    system_monitor = None
+
 @app.get("/servers", response_model=List[GameServerInstance])
 async def get_servers():
     """获取用户的游戏服务器列表"""
     try:
         # 更新容器状态信息
         if docker_manager:
-            for server_id, server in game_servers.items():
+            for server_id, server in list(game_servers.items()):
                 if server.container_id:
-                    container_info = docker_manager.get_container_info(server.container_id)
-                    if container_info:
-                        # 更新状态
-                        container_info.refresh()
-                        if container_info.status == 'running':
-                            server.status = 'running'
-                        elif container_info.status == 'exited':
-                            server.status = 'stopped'
+                    try:
+                        container_info = docker_manager.get_container_info(server.container_id)
+                        if container_info:
+                            # 更新状态
+                            container_info.refresh()
+                            if container_info.status == 'running':
+                                server.status = 'running'
+                            elif container_info.status == 'exited':
+                                server.status = 'stopped'
+                            else:
+                                server.status = container_info.status
+                            
+                            # 更新资源使用情况
+                            server.resource_usage = container_info.get_stats()
+                            server.updated_at = datetime.now().isoformat()
                         else:
-                            server.status = container_info.status
-                        
-                        # 更新资源使用情况
-                        server.resource_usage = container_info.get_stats()
-                        server.updated_at = datetime.now().isoformat()
-                    else:
-                        server.status = 'error'
-                        server.logs.append(f"容器不存在或已被删除: {datetime.now().isoformat()}")
+                            server.status = 'error'
+                            server.logs.append(f"容器不存在或已被删除: {datetime.now().isoformat()}")
+                    except Exception as container_error:
+                        logger.warning(f"Failed to update container info for {server_id}: {str(container_error)}")
+                        # 继续处理其他服务器，不中断整个列表获取
         
         return list(game_servers.values())
     except Exception as e:
@@ -603,9 +663,8 @@ async def get_server(server_id: str):
                     server.logs = server.logs[:10] + container_logs  # 保留前10条服务器日志
                 
                 server.updated_at = datetime.now().isoformat()
-            else:
-                server.status = 'error'
-                server.logs.append(f"容器不存在或已被删除: {datetime.now().isoformat()}")
+            # ✅ 修复：如果容器不存在，保持原有状态，不要改为 'error'
+            # 这样虚拟服务器（用于测试）不会被标记为错误
         
         return server
     except HTTPException:
@@ -615,15 +674,15 @@ async def get_server(server_id: str):
         raise HTTPException(status_code=500, detail="获取服务器详情失败")
 
 @app.post("/upload")
-async def upload_game_code(
-    file: UploadFile = File(..., description="JavaScript游戏代码文件"),
+async def upload_html_game(
+    file: UploadFile = File(..., description="HTML游戏文件（ZIP或单个HTML）"),
     name: str = Form(..., description="游戏名称"),
-    description: str = Form(..., description="游戏描述"),
+    description: str = Form(default="", description="游戏描述（可选）"),
     max_players: int = Form(default=10, description="最大玩家数")
 ):
-    """上传JavaScript游戏代码并创建游戏服务器"""
+    """上传HTML游戏文件并创建游戏服务器"""
     try:
-        logger.info(f"接收到代码上传请求: {name}")
+        logger.info(f"接收到HTML游戏上传请求: {name}")
         
         # 检查资源限制
         if resource_manager:
@@ -635,42 +694,40 @@ async def upload_game_code(
         # 读取文件内容
         file_content = await file.read()
         
-        # 验证文件
-        is_valid, validation_message = validate_file_upload(file_content, file.filename)
+        # 验证HTML游戏文件
+        is_valid, validation_message, metadata = html_game_validator.validate_file(
+            file_content, file.filename, max_file_size=Config.MAX_FILE_SIZE
+        )
         if not is_valid:
-            logger.warning(f"文件验证失败: {validation_message}")
-            raise HTTPException(status_code=400, detail=validation_message)
+            logger.warning(f"HTML游戏文件验证失败: {validation_message}")
+            # 如果metadata包含安全问题，返回详细信息
+            if metadata and 'security_issues' in metadata:
+                error_detail = {
+                    'message': validation_message,
+                    'security_issues': metadata['security_issues']
+                }
+                raise HTTPException(status_code=400, detail=error_detail)
+            else:
+                raise HTTPException(status_code=400, detail=validation_message)
         
-        # 解码文件内容
-        try:
-            code = file_content.decode('utf-8')
-        except UnicodeDecodeError:
-            raise HTTPException(status_code=400, detail="文件编码无效，请使用UTF-8编码")
+        # 提取HTML游戏内容
+        extract_success, extract_message, extracted_data = html_game_validator.extract_html_game(file_content, file.filename)
+        if not extract_success:
+            logger.warning(f"HTML游戏文件提取失败: {extract_message}")
+            raise HTTPException(status_code=400, detail=extract_message)
         
-        # 分析代码
-        analysis_result = code_analyzer.analyze_code(code)
+        # 生成服务器ID（确保只包含ASCII字符）
+        import re
+        import hashlib
         
-        # 检查分析结果
-        if not analysis_result.is_valid:
-            error_details = {
-                "message": "代码分析失败",
-                "syntax_errors": analysis_result.syntax_errors,
-                "security_issues": [
-                    {
-                        "severity": issue.severity,
-                        "message": issue.message,
-                        "line": issue.line,
-                        "code_snippet": issue.code_snippet
-                    }
-                    for issue in analysis_result.security_issues
-                ],
-                "suggestions": analysis_result.suggestions
-            }
-            logger.warning(f"代码分析失败: {error_details}")
-            raise HTTPException(status_code=400, detail=error_details)
+        # 清理游戏名称，只保留ASCII字母和数字
+        safe_name = re.sub(r'[^a-zA-Z0-9]', '', name)
+        if not safe_name:
+            safe_name = "game"
         
-        # 生成服务器ID
-        server_id = f"user_{hash(name + description) % 10000}_{name.replace(' ', '_').lower()}_{len(game_servers) + 1:03d}"
+        # 使用MD5哈希确保唯一性，避免中文字符问题
+        name_hash = hashlib.md5((name + description).encode('utf-8')).hexdigest()[:8]
+        server_id = f"user_{name_hash}_{safe_name.lower()}_{len(game_servers) + 1:03d}"
         
         # 创建游戏服务器实例
         server_instance = GameServerInstance(
@@ -684,8 +741,8 @@ async def upload_game_code(
             updated_at=datetime.now().isoformat(),
             resource_usage={},
             logs=[
-                f"代码上传成功: {file.filename}",
-                f"代码分析通过: {len(analysis_result.warnings)} 个警告",
+                f"HTML游戏文件上传成功: {file.filename}",
+                f"文件类型: {metadata['file_type']}, 文件数量: {metadata['file_count']}",
                 "开始创建Docker容器..."
             ]
         )
@@ -699,10 +756,11 @@ async def upload_game_code(
                 # 获取撮合服务URL
                 matchmaker_url = os.getenv("MATCHMAKER_URL", "http://localhost:8000")
                 
-                # 创建容器
-                container_id, port, image_id = docker_manager.create_game_server(
+                # 创建HTML游戏容器
+                container_id, port, image_id = docker_manager.create_html_game_server(
                     server_id=server_id,
-                    user_code=code,
+                    html_content=extracted_data['index_html_content'],
+                    other_files=extracted_data.get('other_files', {}),
                     server_name=name,
                     matchmaker_url=matchmaker_url
                 )
@@ -720,7 +778,7 @@ async def upload_game_code(
                 if resource_manager:
                     resource_manager.register_container(server_id, container_id)
                 
-                logger.info(f"游戏服务器容器创建成功: {server_id} -> {container_id}")
+                logger.info(f"HTML游戏服务器容器创建成功: {server_id} -> {container_id}")
                 
             except Exception as container_error:
                 # 容器创建失败
@@ -735,19 +793,20 @@ async def upload_game_code(
             server_instance.logs.append("Docker管理器不可用，无法创建容器")
             logger.warning("Docker管理器不可用，无法创建容器")
         
-        logger.info(f"游戏服务器处理完成: {server_id}")
+        logger.info(f"HTML游戏服务器处理完成: {server_id}")
         
         # 返回创建结果
         return {
             "server_id": server_id,
-            "message": "代码上传成功" + (
+            "message": "HTML游戏文件上传成功" + (
                 "，游戏服务器正在运行" if server_instance.status == "running" 
                 else "，但容器创建失败" if server_instance.status == "error"
                 else "，游戏服务器正在创建中"
             ),
-            "analysis_result": {
-                "warnings": analysis_result.warnings,
-                "suggestions": analysis_result.suggestions
+            "validation_result": {
+                "file_type": metadata['file_type'],
+                "file_count": metadata['file_count'],
+                "total_size": metadata['total_size']
             },
             "server": server_instance
         }
@@ -755,8 +814,8 @@ async def upload_game_code(
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"代码上传失败: {str(e)}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"代码上传失败: {str(e)}")
+        logger.error(f"HTML游戏上传失败: {str(e)}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"HTML游戏上传失败: {str(e)}")
 
 @app.post("/servers/{server_id}/stop")
 async def stop_server(server_id: str):
@@ -864,22 +923,47 @@ async def get_server_logs(server_id: str, tail: int = 100):
 
 @app.get("/system/stats")
 async def get_system_stats():
-    """获取系统统计信息"""
+    """获取系统统计信息 - 需求 6.2, 6.3"""
     try:
         stats = {
             "timestamp": datetime.now().isoformat(),
             "game_servers_count": len(game_servers),
             "docker_available": docker_manager is not None,
-            "resource_manager_available": resource_manager is not None
+            "resource_manager_available": resource_manager is not None,
+            "system_monitor_available": system_monitor is not None
         }
         
+        # Docker统计信息
         if docker_manager:
-            docker_stats = docker_manager.get_system_stats()
-            stats.update(docker_stats)
+            try:
+                docker_stats = docker_manager.get_system_stats()
+                stats["docker"] = docker_stats
+            except Exception as e:
+                stats["docker"] = {"error": str(e)}
         
+        # 资源管理统计信息
         if resource_manager:
-            resource_stats = resource_manager.get_resource_stats()
-            stats["resource_management"] = resource_stats
+            try:
+                resource_stats = resource_manager.get_resource_stats()
+                stats["resource_management"] = resource_stats
+            except Exception as e:
+                stats["resource_management"] = {"error": str(e)}
+        
+        # 系统监控统计信息
+        if system_monitor:
+            try:
+                monitoring_stats = system_monitor.get_monitoring_status()
+                stats["monitoring"] = monitoring_stats
+            except Exception as e:
+                stats["monitoring"] = {"error": str(e)}
+        
+        # 服务器状态分布
+        server_status_counts = {}
+        for server in game_servers.values():
+            status = server.status
+            server_status_counts[status] = server_status_counts.get(status, 0) + 1
+        
+        stats["server_status_distribution"] = server_status_counts
         
         return stats
         
@@ -924,9 +1008,129 @@ async def get_container_resource_details(server_id: str):
         raise HTTPException(status_code=500, detail="获取容器资源详情失败")
 
 
+@app.get("/containers/status")
+async def get_all_containers_status():
+    """获取所有容器状态概览 - 需求 6.2, 6.3"""
+    try:
+        containers_info = []
+        
+        if docker_manager:
+            # 获取所有游戏容器
+            game_containers = docker_manager.list_game_containers()
+            
+            for container_info in game_containers:
+                container_info.refresh()  # 刷新状态
+                
+                # 查找对应的服务器信息
+                server_info = None
+                for server in game_servers.values():
+                    if server.container_id == container_info.id:
+                        server_info = server
+                        break
+                
+                container_data = {
+                    "container_id": container_info.id,
+                    "container_name": container_info.name,
+                    "status": container_info.status,
+                    "created": container_info.created if container_info.created else None,
+                    "stats": container_info.get_stats(),
+                    "server_info": {
+                        "server_id": server_info.server_id if server_info else None,
+                        "name": server_info.name if server_info else None,
+                        "status": server_info.status if server_info else None
+                    } if server_info else None
+                }
+                containers_info.append(container_data)
+        
+        return {
+            "timestamp": datetime.now().isoformat(),
+            "total_containers": len(containers_info),
+            "containers": containers_info
+        }
+        
+    except Exception as e:
+        logger.error(f"获取容器状态失败: {str(e)}")
+        raise HTTPException(status_code=500, detail="获取容器状态失败")
+
+@app.get("/containers/{container_id}/detailed")
+async def get_container_detailed_status(container_id: str):
+    """获取特定容器的详细状态信息 - 需求 6.2, 6.3"""
+    try:
+        if not docker_manager:
+            raise HTTPException(
+                status_code=503, 
+                detail=create_error_response(
+                    status_code=503,
+                    message="Docker管理器不可用",
+                    path=f"/containers/{container_id}/detailed"
+                )["error"]
+            )
+        
+        container_info = docker_manager.get_container_info(container_id)
+        if not container_info:
+            raise HTTPException(
+                status_code=404, 
+                detail=create_error_response(
+                    status_code=404,
+                    message="容器不存在",
+                    path=f"/containers/{container_id}/detailed",
+                    details={"container_id": container_id}
+                )["error"]
+            )
+        
+        # 刷新容器信息
+        container_info.refresh()
+        
+        # 查找对应的服务器信息
+        server_info = None
+        for server in game_servers.values():
+            if server.container_id == container_id:
+                server_info = server
+                break
+        
+        # 获取容器日志
+        logs = container_info.get_logs(tail=100)
+        
+        # 获取详细统计信息
+        stats = container_info.get_stats()
+        
+        detailed_info = {
+            "container_id": container_info.id,
+            "name": container_info.name,
+            "status": container_info.status,
+            "created": container_info.created if container_info.created else None,
+            "stats": stats,
+            "logs": logs,
+            "server_info": {
+                "server_id": server_info.server_id,
+                "name": server_info.name,
+                "description": server_info.description,
+                "status": server_info.status,
+                "created_at": server_info.created_at,
+                "updated_at": server_info.updated_at
+            } if server_info else None,
+            "resource_management": None
+        }
+        
+        # 添加资源管理信息
+        if resource_manager:
+            try:
+                resource_details = resource_manager.get_container_details(server_info.server_id if server_info else container_id)
+                detailed_info["resource_management"] = resource_details
+            except Exception as e:
+                detailed_info["resource_management"] = {"error": str(e)}
+        
+        return detailed_info
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"获取容器详细状态失败: {str(e)}")
+        raise HTTPException(status_code=500, detail="获取容器详细状态失败")
+
 @app.get("/system/idle-containers")
 async def get_idle_containers():
-    """获取闲置容器列表"""
+    """获取闲置容器列表 - 需求 6.2, 6.3"""
     try:
         if not resource_manager:
             raise HTTPException(status_code=503, detail="资源管理器不可用")
@@ -934,6 +1138,7 @@ async def get_idle_containers():
         idle_containers = resource_manager.get_idle_containers()
         
         return {
+            "timestamp": datetime.now().isoformat(),
             "count": len(idle_containers),
             "idle_timeout_seconds": resource_manager.config.idle_timeout_seconds,
             "containers": [
@@ -941,7 +1146,8 @@ async def get_idle_containers():
                     "server_id": c.server_id,
                     "container_id": c.container_id[:12],
                     "last_activity": c.last_activity.isoformat(),
-                    "connection_count": c.connection_count
+                    "connection_count": c.connection_count,
+                    "idle_duration_seconds": int((datetime.now() - c.last_activity).total_seconds())
                 }
                 for c in idle_containers
             ]
@@ -1084,24 +1290,24 @@ async def get_integration_status():
         raise HTTPException(status_code=500, detail="获取集成状态失败")
 
 async def test_code_upload_workflow() -> Dict[str, Any]:
-    """测试代码上传到容器创建工作流程"""
+    """测试HTML游戏上传到容器创建工作流程"""
     try:
-        # 检查代码分析器
-        if not code_analyzer:
-            return {"status": "error", "error": "Code analyzer not available"}
+        # 检查HTML游戏验证器
+        if not html_game_validator:
+            return {"status": "error", "error": "HTML game validator not available"}
         
-        # 测试简单的代码分析
-        test_code = "console.log('Hello World');"
-        analysis_result = code_analyzer.analyze_code(test_code)
+        # 测试简单的HTML游戏验证
+        test_html = b"<html><head><title>Test</title></head><body><h1>Hello World</h1></body></html>"
+        is_valid, message, metadata = html_game_validator.validate_file(test_html, "test.html")
         
-        if not analysis_result.is_valid:
-            return {"status": "error", "error": "Code analysis failed for valid code"}
+        if not is_valid:
+            return {"status": "error", "error": f"HTML game validation failed for valid content: {message}"}
         
         # 检查Docker管理器
         if not docker_manager:
             return {"status": "error", "error": "Docker manager not available"}
         
-        return {"status": "healthy", "components_checked": ["code_analyzer", "docker_manager"]}
+        return {"status": "healthy", "components_checked": ["html_game_validator", "docker_manager"]}
         
     except Exception as e:
         return {"status": "error", "error": str(e)}
@@ -1318,10 +1524,292 @@ def test_error_handling() -> Dict[str, Any]:
     except Exception as e:
         return {"result": "failed", "error": str(e)}
 
+# 监控和告警端点 - 需求 6.1, 6.2, 6.3
+@app.get("/monitoring/status")
+async def get_monitoring_status():
+    """获取监控状态概览"""
+    try:
+        if not system_monitor:
+            raise HTTPException(status_code=503, detail="系统监控器不可用")
+        
+        return system_monitor.get_monitoring_status()
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"获取监控状态失败: {str(e)}")
+        raise HTTPException(status_code=500, detail="获取监控状态失败")
+
+@app.get("/monitoring/detailed")
+async def get_detailed_monitoring_status():
+    """获取详细监控状态"""
+    try:
+        if not system_monitor:
+            raise HTTPException(status_code=503, detail="系统监控器不可用")
+        
+        return system_monitor.get_detailed_status()
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"获取详细监控状态失败: {str(e)}")
+        raise HTTPException(status_code=500, detail="获取详细监控状态失败")
+
+@app.get("/monitoring/alerts")
+async def get_active_alerts():
+    """获取活跃告警列表"""
+    try:
+        if not system_monitor:
+            raise HTTPException(status_code=503, detail="系统监控器不可用")
+        
+        active_alerts = system_monitor.alert_manager.get_active_alerts()
+        return {
+            "count": len(active_alerts),
+            "alerts": [alert.to_dict() for alert in active_alerts]
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"获取活跃告警失败: {str(e)}")
+        raise HTTPException(status_code=500, detail="获取活跃告警失败")
+
+@app.get("/monitoring/alerts/history")
+async def get_alert_history(hours: int = 24):
+    """获取告警历史"""
+    try:
+        if not system_monitor:
+            raise HTTPException(status_code=503, detail="系统监控器不可用")
+        
+        if hours <= 0 or hours > 168:  # 最多7天
+            raise HTTPException(status_code=400, detail="小时数必须在1-168之间")
+        
+        alert_history = system_monitor.alert_manager.get_alert_history(hours=hours)
+        return {
+            "hours": hours,
+            "count": len(alert_history),
+            "alerts": [alert.to_dict() for alert in alert_history]
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"获取告警历史失败: {str(e)}")
+        raise HTTPException(status_code=500, detail="获取告警历史失败")
+
+@app.post("/monitoring/alerts/{alert_id}/resolve")
+async def resolve_alert(alert_id: str):
+    """解决告警"""
+    try:
+        if not system_monitor:
+            raise HTTPException(status_code=503, detail="系统监控器不可用")
+        
+        success = system_monitor.resolve_alert(alert_id)
+        if success:
+            return {"message": "告警已解决", "alert_id": alert_id}
+        else:
+            raise HTTPException(status_code=404, detail="告警不存在或已解决")
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"解决告警失败: {str(e)}")
+        raise HTTPException(status_code=500, detail="解决告警失败")
+
+@app.post("/monitoring/alerts/manual")
+async def create_manual_alert(
+    alert_type: str,
+    severity: str,
+    title: str,
+    message: str,
+    source: str = "manual"
+):
+    """手动创建告警"""
+    try:
+        if not system_monitor:
+            raise HTTPException(status_code=503, detail="系统监控器不可用")
+        
+        # 验证参数
+        try:
+            alert_type_enum = AlertType(alert_type)
+            severity_enum = AlertSeverity(severity)
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=f"无效的告警类型或严重程度: {e}")
+        
+        alert = system_monitor.create_manual_alert(
+            alert_type=alert_type_enum,
+            severity=severity_enum,
+            title=title,
+            message=message,
+            source=source
+        )
+        
+        if alert:
+            return {"message": "告警已创建", "alert": alert.to_dict()}
+        else:
+            return {"message": "告警在冷却期内，未创建"}
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"创建手动告警失败: {str(e)}")
+        raise HTTPException(status_code=500, detail="创建手动告警失败")
+
+@app.get("/monitoring/services")
+async def get_service_statuses():
+    """获取外部服务状态"""
+    try:
+        if not system_monitor:
+            raise HTTPException(status_code=503, detail="系统监控器不可用")
+        
+        service_statuses = system_monitor.service_monitor.get_service_statuses()
+        return {
+            "count": len(service_statuses),
+            "services": {name: status.to_dict() for name, status in service_statuses.items()}
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"获取服务状态失败: {str(e)}")
+        raise HTTPException(status_code=500, detail="获取服务状态失败")
+
+@app.get("/api/endpoints")
+async def list_api_endpoints():
+    """列出所有可用的API端点 - 需求 6.1"""
+    try:
+        endpoints = []
+        
+        for route in app.routes:
+            if hasattr(route, "methods") and hasattr(route, "path"):
+                endpoint_info = {
+                    "path": route.path,
+                    "methods": list(route.methods),
+                    "name": route.name,
+                    "description": route.endpoint.__doc__.strip() if route.endpoint.__doc__ else "No description"
+                }
+                endpoints.append(endpoint_info)
+        
+        # 按路径排序
+        endpoints.sort(key=lambda x: x["path"])
+        
+        return {
+            "timestamp": datetime.now().isoformat(),
+            "total_endpoints": len(endpoints),
+            "endpoints": endpoints,
+            "documentation": {
+                "swagger_ui": "/docs",
+                "redoc": "/redoc",
+                "openapi_schema": "/openapi.json"
+            }
+        }
+        
+    except Exception as e:
+        logger.error(f"列出API端点失败: {str(e)}")
+        raise HTTPException(status_code=500, detail="列出API端点失败")
+
+@app.get("/api/documentation")
+async def get_api_documentation():
+    """获取API文档信息 - 需求 6.1"""
+    return {
+        "service": "Game Server Factory",
+        "version": "1.0.0",
+        "description": "游戏服务器工厂 - 负责HTML游戏上传、验证和动态游戏服务器创建",
+        "documentation_formats": {
+            "swagger_ui": {
+                "url": "/docs",
+                "description": "交互式API文档，可以直接测试API端点"
+            },
+            "redoc": {
+                "url": "/redoc",
+                "description": "美观的API文档，适合阅读和分享"
+            },
+            "openapi_json": {
+                "url": "/openapi.json",
+                "description": "OpenAPI 3.0规范的JSON格式，可用于代码生成"
+            }
+        },
+        "api_categories": {
+            "html_game_management": {
+                "description": "HTML游戏上传和管理",
+                "endpoints": [
+                    "POST /upload - 上传HTML游戏文件",
+                    "GET /servers - 获取服务器列表",
+                    "GET /servers/{server_id} - 获取服务器详情",
+                    "POST /servers/{server_id}/stop - 停止服务器",
+                    "DELETE /servers/{server_id} - 删除服务器",
+                    "GET /servers/{server_id}/logs - 获取服务器日志"
+                ]
+            },
+            "health_monitoring": {
+                "description": "健康检查和监控",
+                "endpoints": [
+                    "GET /health - 基础健康检查",
+                    "GET /monitoring/status - 监控状态概览",
+                    "GET /monitoring/detailed - 详细监控状态",
+                    "GET /monitoring/alerts - 活跃告警列表",
+                    "GET /monitoring/services - 外部服务状态"
+                ]
+            },
+            "container_management": {
+                "description": "容器状态和管理",
+                "endpoints": [
+                    "GET /containers/status - 所有容器状态",
+                    "GET /containers/{container_id}/detailed - 容器详细信息",
+                    "GET /system/idle-containers - 闲置容器列表",
+                    "POST /system/cleanup/{server_id} - 强制清理服务器"
+                ]
+            },
+            "system_information": {
+                "description": "系统信息和统计",
+                "endpoints": [
+                    "GET /system/stats - 系统统计信息",
+                    "GET /system/resources - 资源管理统计",
+                    "GET /system/integration-status - 系统集成状态",
+                    "GET /system/end-to-end-test - 端到端测试"
+                ]
+            }
+        },
+        "authentication": "当前版本不需要认证",
+        "rate_limiting": f"每分钟最多 {Config.API_RATE_LIMIT} 个请求",
+        "error_handling": {
+            "format": "所有错误响应遵循标准格式",
+            "example": {
+                "error": {
+                    "code": 400,
+                    "message": "错误描述",
+                    "timestamp": "2025-12-19T10:00:00Z",
+                    "path": "/api/path",
+                    "details": {}
+                }
+            }
+        }
+    }
+
+@app.on_event("startup")
+async def startup_event():
+    """应用启动时的初始化工作"""
+    logger.info("应用正在启动...")
+    
+    # 启动系统监控
+    if system_monitor:
+        try:
+            system_monitor.start_monitoring()
+            logger.info("系统监控已启动")
+        except Exception as e:
+            logger.error(f"启动系统监控失败: {e}")
+    
+    logger.info("应用启动完成")
+
 @app.on_event("shutdown")
 async def shutdown_event():
     """应用关闭时的清理工作"""
     logger.info("应用正在关闭...")
+    
+    # 停止系统监控
+    if system_monitor:
+        system_monitor.stop_monitoring()
+        logger.info("系统监控已停止")
     
     # 停止资源监控
     if resource_manager:

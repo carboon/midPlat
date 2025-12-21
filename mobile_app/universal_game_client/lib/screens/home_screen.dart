@@ -17,11 +17,26 @@ class HomeScreen extends StatefulWidget {
 
 class _HomeScreenState extends State<HomeScreen> {
   late Future<List<Room>> _roomsFuture;
+  bool _isRefreshing = false;
 
   @override
   void initState() {
     super.initState();
-    _roomsFuture = ApiService.fetchRooms();
+    _roomsFuture = _fetchRooms();
+  }
+
+  Future<List<Room>> _fetchRooms() async {
+    try {
+      final rooms = await ApiService.fetchRooms();
+      // 更新provider中的房间列表
+      if (mounted) {
+        Provider.of<RoomProvider>(context, listen: false).setRooms(rooms);
+      }
+      return rooms;
+    } catch (e) {
+      print('获取房间列表失败: $e');
+      rethrow;
+    }
   }
 
   String _getErrorMessage(dynamic error) {
@@ -40,65 +55,153 @@ class _HomeScreenState extends State<HomeScreen> {
         title: '游戏房间',
         actions: [
           IconButton(
-            icon: const Icon(Icons.refresh),
-            onPressed: _refreshRooms,
+            icon: const Icon(Icons.dns),
+            tooltip: '我的服务器',
+            onPressed: () => Navigator.pushNamed(context, AppRoutes.myServers),
+          ),
+          IconButton(
+            icon: const Icon(Icons.upload_file),
+            tooltip: '上传代码',
+            onPressed: () => Navigator.pushNamed(context, AppRoutes.uploadCode),
+          ),
+          IconButton(
+            icon: _isRefreshing 
+                ? const SizedBox(
+                    width: 20,
+                    height: 20,
+                    child: CircularProgressIndicator(
+                      strokeWidth: 2,
+                      valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
+                    ),
+                  )
+                : const Icon(Icons.refresh),
+            onPressed: _isRefreshing ? null : _refreshRooms,
           ),
         ],
       ),
-      body: FutureBuilder<List<Room>>(
-        future: _roomsFuture,
-        builder: (context, snapshot) {
-          if (snapshot.connectionState == ConnectionState.waiting) {
-            return const Center(child: CircularProgressIndicator());
-          } else if (snapshot.hasError) {
-            return Center(
-              child: Column(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  Icon(Icons.error_outline, size: 64, color: AppColors.error),
-                  const SizedBox(height: 16),
-                  Text(_getErrorMessage(snapshot.error)),
-                  const SizedBox(height: 16),
-                  ElevatedButton(
-                    onPressed: _refreshRooms,
-                    child: const Text('重试'),
+      body: RefreshIndicator(
+        onRefresh: _refreshRooms,
+        child: FutureBuilder<List<Room>>(
+          future: _roomsFuture,
+          builder: (context, snapshot) {
+            if (snapshot.connectionState == ConnectionState.waiting) {
+              return const Center(
+                child: Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    CircularProgressIndicator(),
+                    SizedBox(height: 16),
+                    Text('正在加载房间列表...'),
+                  ],
+                ),
+              );
+            } else if (snapshot.hasError) {
+              return Center(
+                child: Padding(
+                  padding: const EdgeInsets.all(16.0),
+                  child: Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      Icon(Icons.error_outline, size: 64, color: AppColors.error),
+                      const SizedBox(height: 16),
+                      Text(
+                        _getErrorMessage(snapshot.error),
+                        textAlign: TextAlign.center,
+                        style: const TextStyle(fontSize: 16),
+                      ),
+                      const SizedBox(height: 24),
+                      ElevatedButton.icon(
+                        onPressed: _refreshRooms,
+                        icon: const Icon(Icons.refresh),
+                        label: const Text('重试'),
+                      ),
+                    ],
                   ),
-                ],
-              ),
-            );
-          } else if (snapshot.hasData) {
-            final rooms = snapshot.data!;
-            if (rooms.isEmpty) {
+                ),
+              );
+            } else if (snapshot.hasData) {
+              final rooms = snapshot.data!;
+              if (rooms.isEmpty) {
+                return Center(
+                  child: Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      Icon(Icons.inbox, size: 64, color: Colors.grey[400]),
+                      const SizedBox(height: 16),
+                      Text(
+                        '暂无可用房间',
+                        style: TextStyle(fontSize: 18, color: Colors.grey[600]),
+                      ),
+                      const SizedBox(height: 8),
+                      Text(
+                        '下拉刷新或创建新的游戏服务器',
+                        style: TextStyle(fontSize: 14, color: Colors.grey[500]),
+                      ),
+                      const SizedBox(height: 24),
+                      ElevatedButton.icon(
+                        onPressed: () => Navigator.pushNamed(context, AppRoutes.uploadCode),
+                        icon: const Icon(Icons.add),
+                        label: const Text('创建游戏服务器'),
+                      ),
+                    ],
+                  ),
+                );
+              }
+              return ListView.builder(
+                padding: const EdgeInsets.only(bottom: 80),
+                itemCount: rooms.length,
+                itemBuilder: (context, index) {
+                  final room = rooms[index];
+                  // 根据房间状态推导服务器状态
+                  String serverStatus = 'active';
+                  if (room.playerCount >= room.maxPlayers) {
+                    serverStatus = 'full';
+                  } else if (room.playerCount == 0) {
+                    serverStatus = 'waiting';
+                  }
+                  
+                  return RoomCard(
+                    roomName: room.name,
+                    playerCount: room.playerCount,
+                    maxPlayers: room.maxPlayers,
+                    serverStatus: serverStatus,
+                    onTap: () => _onRoomTap(context, room),
+                  );
+                },
+              );
+            } else {
               return const Center(child: Text('暂无房间'));
             }
-            return ListView.builder(
-              itemCount: rooms.length,
-              itemBuilder: (context, index) {
-                final room = rooms[index];
-                return RoomCard(
-                  roomName: room.name,
-                  playerCount: room.playerCount,
-                  maxPlayers: room.maxPlayers,
-                  onTap: () => _onRoomTap(context, room),
-                );
-              },
-            );
-          } else {
-            return const Center(child: Text('暂无房间'));
-          }
-        },
+          },
+        ),
       ),
-      floatingActionButton: FloatingActionButton(
+      floatingActionButton: FloatingActionButton.extended(
         onPressed: _navigateToJoinRoom,
-        child: const Icon(Icons.add),
+        icon: const Icon(Icons.add),
+        label: const Text('加入房间'),
       ),
     );
   }
 
-  void _refreshRooms() {
+  Future<void> _refreshRooms() async {
+    if (_isRefreshing) return;
+    
     setState(() {
-      _roomsFuture = ApiService.fetchRooms();
+      _isRefreshing = true;
     });
+
+    try {
+      setState(() {
+        _roomsFuture = _fetchRooms();
+      });
+      await _roomsFuture;
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isRefreshing = false;
+        });
+      }
+    }
   }
 
   void _onRoomTap(BuildContext context, Room room) {

@@ -225,7 +225,7 @@ def validate_file_upload(file_content: bytes, filename: str) -> Tuple[bool, str]
             return False, f"文件大小超过限制 ({len(file_content)} > {max_size} bytes)"
         
         # 检查文件扩展名
-        allowed_extensions = ['.js', '.mjs']
+        allowed_extensions = ['.html', '.htm', '.zip', '.js', '.mjs']
         if not any(filename.lower().endswith(ext) for ext in allowed_extensions):
             return False, f"不支持的文件类型，仅支持: {', '.join(allowed_extensions)}"
         

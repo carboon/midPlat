@@ -1,0 +1,135 @@
+# 生产环境Docker Compose配置覆盖
+# 需求: 7.1, 7.2, 7.4, 7.5
+
+services:
+  # 撮合服务生产配置
+  matchmaker:
+    environment:
+      - ENVIRONMENT=production
+      - DEBUG=false
+      - LOG_LEVEL=WARNING
+      - HEARTBEAT_TIMEOUT=${HEARTBEAT_TIMEOUT:-60}
+      - CLEANUP_INTERVAL=${CLEANUP_INTERVAL:-30}
+      - ALLOWED_ORIGINS=${ALLOWED_ORIGINS:-https://yourdomain.com}
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 512M
+        reservations:
+          cpus: '0.5'
+          memory: 256M
+      restart_policy:
+        condition: on-failure
+        delay: 5s
+        max_attempts: 3
+        window: 120s
+    healthcheck:
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"
+        max-file: "5"
+
+  # 游戏服务器工厂生产配置
+  game-server-factory:
+    environment:
+      - ENVIRONMENT=production
+      - DEBUG=false
+      - LOG_LEVEL=WARNING
+      - MAX_CONTAINERS=${MAX_CONTAINERS:-200}
+      - CONTAINER_MEMORY_LIMIT=${CONTAINER_MEMORY_LIMIT:-1g}
+      - CONTAINER_CPU_LIMIT=${CONTAINER_CPU_LIMIT:-2.0}
+      - IDLE_TIMEOUT_SECONDS=${IDLE_TIMEOUT_SECONDS:-900}
+      - CLEANUP_INTERVAL_SECONDS=${CLEANUP_INTERVAL_SECONDS:-180}
+      - ALLOWED_ORIGINS=${ALLOWED_ORIGINS:-https://yourdomain.com}
+      - ENABLE_PERFORMANCE_MONITORING=true
+      - SHOW_DETAILED_ERRORS=false
+    deploy:
+      resources:
+        limits:
+          cpus: '2.0'
+          memory: 2G
+        reservations:
+          cpus: '1.0'
+          memory: 1G
+      restart_policy:
+        condition: on-failure
+        delay: 10s
+        max_attempts: 3
+        window: 120s
+    healthcheck:
+      interval: 15s
+      timeout: 10s
+      retries: 5
+      start_period: 45s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "100m"
+        max-file: "10"
+
+  # 示例游戏服务器生产配置
+  example-game-server:
+    environment:
+      - HEARTBEAT_INTERVAL=${HEARTBEAT_INTERVAL:-30000}
+      - RETRY_INTERVAL=${RETRY_INTERVAL:-10000}
+      - MAX_PLAYERS=${EXAMPLE_MAX_PLAYERS:-50}
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 256M
+        reservations:
+          cpus: '0.25'
+          memory: 128M
+      restart_policy:
+        condition: on-failure
+        delay: 5s
+        max_attempts: 3
+        window: 120s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "20m"
+        max-file: "3"
+
+# 生产环境网络配置
+networks:
+  game-network:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.21.0.0/16
+          ip_range: 172.21.240.0/20
+          gateway: 172.21.0.1
+    driver_opts:
+      com.docker.network.bridge.name: game-bridge
+      com.docker.network.bridge.enable_icc: "true"
+      com.docker.network.bridge.enable_ip_masquerade: "true"
+      com.docker.network.driver.mtu: 1500
+
+# 生产环境卷配置
+volumes:
+  matchmaker_logs:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: /var/log/ai-game-platform/matchmaker
+  factory_logs:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: /var/log/ai-game-platform/factory
+  factory_data:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: /var/lib/ai-game-platform/factory

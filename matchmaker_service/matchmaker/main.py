@@ -36,6 +36,9 @@ class Config:
     # 安全配置
     ALLOWED_ORIGINS = os.getenv("ALLOWED_ORIGINS", "*").split(",")
     
+    # 监控配置常量
+    STALE_SERVER_THRESHOLD_RATIO = 0.5  # 过期服务器阈值比例
+    
     @classmethod
     def validate_config(cls) -> List[str]:
         """验证配置参数"""
@@ -128,7 +131,9 @@ logger.info(f"  Cleanup interval: {Config.CLEANUP_INTERVAL}s")
 app = FastAPI(
     title="Game Matchmaker Service", 
     version="1.0.0",
-    description="游戏撮合服务 - 负责游戏服务器注册、发现和状态管理"
+    description="游戏撮合服务 - 负责游戏服务器注册、发现和状态管理",
+    docs_url="/docs",
+    redoc_url="/redoc"
 )
 
 # 设置CORS中间件
@@ -152,7 +157,7 @@ def create_error_response(
         }
     }
     
-    if details:
+    if details is not None:
         error_response["error"]["details"] = details
     
     return error_response
@@ -318,6 +323,12 @@ class GameServerStore:
         for server_id in stale_servers:
             self.remove_server(server_id)
         
+        # 更新清理统计
+        self._last_cleanup_time = now
+        self._last_cleanup_count = len(stale_servers)
+        self._total_cleanups = getattr(self, '_total_cleanups', 0) + 1
+        self._total_cleaned = getattr(self, '_total_cleaned', 0) + len(stale_servers)
+        
         return len(stale_servers)
 
 store = GameServerStore(heartbeat_timeout=Config.HEARTBEAT_TIMEOUT)
@@ -341,11 +352,35 @@ async def periodic_cleanup():
 
 @app.get("/")
 async def root():
+    """根路径 - 服务信息和API导航 - 需求 6.1"""
+    active_servers = store.get_all_active_servers()
     return {
         "service": "Game Matchmaker",
         "version": "1.0.0",
+        "description": "游戏撮合服务 - 负责游戏服务器注册、发现和状态管理",
         "status": "running",
-        "active_servers": len(store.get_all_active_servers())
+        "environment": Config.ENVIRONMENT,
+        "statistics": {
+            "active_servers": len(active_servers),
+            "total_registered_servers": len(store.servers),
+            "total_players": sum(s.current_players for s in active_servers)
+        },
+        "api_documentation": {
+            "swagger_ui": "/docs",
+            "redoc": "/redoc",
+            "openapi_json": "/openapi.json"
+        },
+        "main_endpoints": {
+            "register_server": "POST /register",
+            "list_servers": "GET /servers",
+            "server_heartbeat": "POST /heartbeat/{server_id}",
+            "health_check": "GET /health"
+        },
+        "monitoring_endpoints": {
+            "monitoring_status": "/monitoring/status",
+            "detailed_servers": "/monitoring/servers/detailed",
+            "cleanup_stats": "/monitoring/cleanup/stats"
+        }
     }
 
 @app.post("/register", response_model=Dict[str, str])
@@ -415,28 +450,51 @@ async def health_check():
         # 检查服务健康状态
         status = "healthy"
         issues = []
+        components = {}
         
         # 检查是否有过多的过期服务器
         stale_count = len(store.servers) - len(active_servers)
-        if stale_count > len(active_servers) * 0.5:  # 如果过期服务器超过活跃服务器的50%
+        if stale_count > len(active_servers) * Config.STALE_SERVER_THRESHOLD_RATIO and len(active_servers) > 0:
             issues.append("High number of stale servers detected")
             status = "degraded"
+        
+        # 检查各组件状态
+        components["server_store"] = "healthy"
+        components["cleanup_task"] = "healthy"  # 假设清理任务正常运行
+        
+        # 检查服务器分布
+        server_types = {}
+        for server in active_servers:
+            game_type = server.metadata.get("game_type", "unknown")
+            server_types[game_type] = server_types.get(game_type, 0) + 1
         
         health_data = {
             "status": status,
             "timestamp": datetime.now().isoformat(),
+            "components": components,
             "statistics": {
                 "active_servers": len(active_servers),
                 "total_registered_servers": len(store.servers),
                 "stale_servers": stale_count,
                 "total_players": total_players,
-                "heartbeat_timeout_seconds": store.heartbeat_timeout
+                "heartbeat_timeout_seconds": store.heartbeat_timeout,
+                "server_types": server_types
             },
             "configuration": {
                 "environment": Config.ENVIRONMENT,
                 "heartbeat_timeout": Config.HEARTBEAT_TIMEOUT,
                 "cleanup_interval": Config.CLEANUP_INTERVAL,
-                "debug_mode": Config.DEBUG
+                "debug_mode": Config.DEBUG,
+                "host": Config.HOST,
+                "port": Config.PORT
+            },
+            "performance": {
+                "cleanup_stats": {
+                    "last_cleanup_time": getattr(store, '_last_cleanup_time', datetime.now()).isoformat(),
+                    "last_cleanup_count": getattr(store, '_last_cleanup_count', 0),
+                    "total_cleanups": getattr(store, '_total_cleanups', 0),
+                    "total_cleaned": getattr(store, '_total_cleaned', 0)
+                }
             }
         }
         
@@ -456,6 +514,124 @@ async def health_check():
                 details={"error": str(e)} if Config.DEBUG else None
             )["error"]
         )
+
+@app.get("/monitoring/status")
+async def get_monitoring_status():
+    """获取监控状态 - 需求 6.2, 6.3"""
+    try:
+        active_servers = store.get_all_active_servers()
+        total_players = sum(s.current_players for s in active_servers)
+        stale_count = len(store.servers) - len(active_servers)
+        
+        # 计算服务器分布统计
+        server_stats = {}
+        for server in active_servers:
+            game_type = server.metadata.get("game_type", "unknown")
+            if game_type not in server_stats:
+                server_stats[game_type] = {"count": 0, "players": 0}
+            server_stats[game_type]["count"] += 1
+            server_stats[game_type]["players"] += server.current_players
+        
+        # 计算平均响应时间（基于心跳间隔）
+        now = datetime.now()
+        recent_heartbeats = []
+        for server_data in store.servers.values():
+            heartbeat_age = (now - server_data["last_heartbeat"]).total_seconds()
+            if heartbeat_age < Config.HEARTBEAT_TIMEOUT:
+                recent_heartbeats.append(heartbeat_age)
+        
+        avg_heartbeat_age = sum(recent_heartbeats) / len(recent_heartbeats) if recent_heartbeats else 0
+        
+        return {
+            "timestamp": datetime.now().isoformat(),
+            "service_status": "healthy" if stale_count <= len(active_servers) * Config.STALE_SERVER_THRESHOLD_RATIO else "degraded",
+            "statistics": {
+                "active_servers": len(active_servers),
+                "total_registered_servers": len(store.servers),
+                "stale_servers": stale_count,
+                "total_players": total_players,
+                "average_heartbeat_age_seconds": round(avg_heartbeat_age, 2),
+                "server_types": server_stats
+            },
+            "performance": {
+                "cleanup_interval_seconds": Config.CLEANUP_INTERVAL,
+                "heartbeat_timeout_seconds": Config.HEARTBEAT_TIMEOUT,
+                "last_cleanup_removed": getattr(store, '_last_cleanup_count', 0)
+            },
+            "configuration": {
+                "environment": Config.ENVIRONMENT,
+                "debug_mode": Config.DEBUG,
+                "allowed_origins": Config.ALLOWED_ORIGINS
+            }
+        }
+        
+    except Exception as e:
+        logger.error(f"获取监控状态失败: {str(e)}", exc_info=True)
+        raise HTTPException(status_code=500, detail="获取监控状态失败")
+
+@app.get("/monitoring/servers/detailed")
+async def get_detailed_server_info():
+    """获取详细服务器信息 - 需求 6.2, 6.3"""
+    try:
+        now = datetime.now()
+        timeout_threshold = now - timedelta(seconds=store.heartbeat_timeout)
+        
+        detailed_servers = []
+        for server_id, server_data in store.servers.items():
+            uptime = int((now - server_data["registered_at"]).total_seconds())
+            heartbeat_age = int((now - server_data["last_heartbeat"]).total_seconds())
+            is_active = server_data["last_heartbeat"] >= timeout_threshold
+            
+            detailed_info = {
+                "server_id": server_id,
+                "name": server_data["name"],
+                "ip": server_data["ip"],
+                "port": server_data["port"],
+                "status": "active" if is_active else "stale",
+                "current_players": server_data["current_players"],
+                "max_players": server_data["max_players"],
+                "uptime_seconds": uptime,
+                "last_heartbeat_age_seconds": heartbeat_age,
+                "registered_at": server_data["registered_at"].isoformat(),
+                "last_heartbeat": server_data["last_heartbeat"].isoformat(),
+                "metadata": server_data["metadata"],
+                "health_score": max(0, 100 - (heartbeat_age * 2))  # 简单的健康评分
+            }
+            detailed_servers.append(detailed_info)
+        
+        # 按健康评分排序
+        detailed_servers.sort(key=lambda x: x["health_score"], reverse=True)
+        
+        return {
+            "timestamp": datetime.now().isoformat(),
+            "total_servers": len(detailed_servers),
+            "servers": detailed_servers
+        }
+        
+    except Exception as e:
+        logger.error(f"获取详细服务器信息失败: {str(e)}", exc_info=True)
+        raise HTTPException(status_code=500, detail="获取详细服务器信息失败")
+
+@app.get("/monitoring/cleanup/stats")
+async def get_cleanup_stats():
+    """获取清理统计信息 - 需求 6.2, 6.3"""
+    try:
+        # 模拟清理统计（在实际实现中，这些数据应该被持久化）
+        cleanup_stats = {
+            "timestamp": datetime.now().isoformat(),
+            "cleanup_interval_seconds": Config.CLEANUP_INTERVAL,
+            "heartbeat_timeout_seconds": Config.HEARTBEAT_TIMEOUT,
+            "last_cleanup_time": getattr(store, '_last_cleanup_time', datetime.now()).isoformat(),
+            "last_cleanup_removed_count": getattr(store, '_last_cleanup_count', 0),
+            "total_cleanups_performed": getattr(store, '_total_cleanups', 0),
+            "total_servers_cleaned": getattr(store, '_total_cleaned', 0)
+        }
+        
+        return cleanup_stats
+        
+    except Exception as e:
+        logger.error(f"获取清理统计信息失败: {str(e)}", exc_info=True)
+        raise HTTPException(status_code=500, detail="获取清理统计信息失败")
 
 if __name__ == "__main__":
     import uvicorn

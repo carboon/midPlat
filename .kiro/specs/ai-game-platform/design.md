@@ -1,8 +1,8 @@
-# AI游戏平台 - 设计文档
+# AI游戏平台 - 设计文档 (HTML游戏版本)
 
 ## 概述
 
-AI游戏平台是一个动态分布式多人游戏基础设施系统，采用微服务架构设计，支持AI生成游戏的代码上传、自动部署、发现和实时游玩。系统由四个核心组件组成：游戏服务器工厂(Game Server Factory)、撮合服务(Matchmaker Service)、游戏服务器模板(Game Server Template)和通用客户端(Universal Client)，通过标准化的API和协议实现从代码到游戏的完整自动化流程。
+AI游戏平台是一个轻量级的HTML游戏分发和执行系统，采用微服务架构设计，支持开发者快速上传、分发和运行HTML格式的游戏。系统由四个核心组件组成：游戏服务器工厂(Game Server Factory)、撮合服务(Matchmaker Service)、游戏服务器模板(Game Server Template)和通用客户端(Universal Client)，通过标准化的API和协议实现从HTML游戏上传到游戏执行的完整自动化流程。本设计专注于HTML游戏的核心功能，简化了代码分析和容器管理的复杂性。
 
 ## 架构
 
@@ -15,7 +15,7 @@ AI游戏平台是一个动态分布式多人游戏基础设施系统，采用微
 │  (Flutter)      │   & Game Connection │  (Python/FastAPI)│
 └─────────────────┘                     └─────────────────┘
          │                                       ▲
-         │ Code Upload &                         │ HTTP Registration
+         │ HTML Game Upload &                    │ HTTP Registration
          │ Lifecycle Mgmt                        │ & Heartbeat
          ▼                                       │
 ┌─────────────────┐                             │
@@ -26,53 +26,54 @@ AI游戏平台是一个动态分布式多人游戏基础设施系统，采用微
          │ Docker Container
          │ Management
          ▼
-┌─────────────────┐    WebSocket     ┌─────────────────┐    WebSocket     ┌─────────────────┐
-│  Game Server    │◄────────────────│  Game Server    │◄────────────────│  Game Server    │
-│  Instance 1     │    Connection    │  Instance 2     │    Connection    │  Instance N     │
-│  (Docker)       │    (from Client) │  (Docker)       │    (from Client) │  (Docker)       │
+┌─────────────────┐    HTTP       ┌─────────────────┐    HTTP       ┌─────────────────┐
+│  Game Server    │◄────────────│  Game Server    │◄────────────│  Game Server    │
+│  Instance 1     │  (HTML Game) │  Instance 2     │  (HTML Game) │  Instance N     │
+│  (Docker)       │  Serving     │  (Docker)       │  Serving     │  (Docker)       │
 └─────────────────┘                  └─────────────────┘                  └─────────────────┘
          ▲                                    ▲                                    ▲
          │                                    │                                    │
          └────────────────────────────────────┼────────────────────────────────────┘
-                    WebSocket Connections from Universal Client
+                    HTTP Connections from Universal Client
 ```
 
 **连接说明:**
-1. **Client ↔ Matchmaker**: 房间发现和列表获取（保持原有功能）
-2. **Client ↔ Game Server Factory**: 代码上传和服务器生命周期管理（新功能）
-3. **Client ↔ Game Servers**: WebSocket游戏连接（保持原有功能）
-4. **Game Server Factory ↔ Game Servers**: Docker容器管理（新功能）
-5. **Game Servers ↔ Matchmaker**: 自动注册和心跳（保持原有功能）
+1. **Client ↔ Matchmaker**: 房间发现和列表获取
+2. **Client ↔ Game Server Factory**: HTML游戏文件上传和服务器生命周期管理
+3. **Client ↔ Game Servers**: HTTP连接获取HTML游戏内容
+4. **Game Server Factory ↔ Game Servers**: Docker容器管理
+5. **Game Servers ↔ Matchmaker**: 自动注册和心跳
 
 ### 技术栈
 
-- **游戏服务器工厂**: Python 3.8+, FastAPI, Docker SDK, AST代码分析
+- **游戏服务器工厂**: Python 3.8+, FastAPI, Docker SDK, 文件验证
 - **撮合服务**: Python 3.8+, FastAPI, Uvicorn, Pydantic
-- **游戏服务器**: Node.js, Express, Socket.IO, WebSocket
+- **游戏服务器**: Node.js, Express, 静态文件服务
 - **客户端**: Flutter, Dart, Provider状态管理, HTTP客户端, 文件上传
 - **容器化**: Docker, Docker Compose, 动态容器管理
-- **通信协议**: HTTP/REST, WebSocket, JSON, 文件上传
+- **通信协议**: HTTP/REST, JSON, 文件上传
 
 ## 组件和接口
 
 ### 1. 游戏服务器工厂 (Game Server Factory)
 
 #### 核心功能
-- JavaScript代码接收和验证
-- 代码安全分析和语法检查
+- HTML游戏文件接收和验证
+- 文件完整性检查
 - Docker容器动态创建和管理
 - 游戏服务器生命周期管理
 
 #### 主要接口
 
 ```python
-# 代码上传
+# HTML游戏文件上传
 POST /upload
 Content-Type: multipart/form-data
 {
-    "file": "JavaScript文件",
+    "file": "HTML游戏文件（ZIP或单个HTML）",
     "name": "游戏名称",
-    "description": "游戏描述"
+    "description": "游戏描述",
+    "max_players": "最大玩家数"
 }
 
 # 获取用户的游戏服务器列表
@@ -109,7 +110,6 @@ class GameServerInstance:
     port: int
     created_at: str
     updated_at: str
-    resource_usage: Dict
     logs: List[str]
 ```
 
@@ -168,23 +168,20 @@ class GameServerInfo:
 ### 3. 游戏服务器模板 (Game Server Template)
 
 #### 核心功能
-- WebSocket实时通信
-- 游戏状态管理
+- HTTP静态文件服务
+- HTML游戏内容提供
 - 自动注册到撮合服务
 - 定期心跳上报
 
 #### 主要接口
 
 ```javascript
-// WebSocket事件
-socket.on('connection', callback)
-socket.on('click', callback)
-socket.on('disconnect', callback)
-
 // HTTP静态文件服务
 GET / -> index.html
+GET /assets/* -> 游戏资源文件
 
 // 内部方法
+registerWithMatchmaker() // 向撮合服务注册
 sendHeartbeat() // 定期向撮合服务发送心跳
 ```
 
@@ -192,18 +189,18 @@ sendHeartbeat() // 定期向撮合服务发送心跳
 
 ```javascript
 gameState = {
-    clickCount: number,
-    // 可扩展其他游戏状态
+    // HTML游戏的状态由游戏本身管理
+    // 服务器只负责提供HTML内容
 }
 ```
 
 ### 4. 通用客户端 (Universal Client)
 
 #### 核心功能
-- JavaScript代码文件上传
+- HTML游戏文件上传
 - 游戏服务器生命周期管理
 - 房间列表浏览
-- WebSocket游戏连接
+- HTTP游戏连接
 - 跨平台UI适配
 
 #### 主要组件
@@ -215,7 +212,6 @@ class GameServerInstance {
     String containerId;
     int port;
     DateTime createdAt, updatedAt;
-    Map<String, dynamic> resourceUsage;
 }
 
 class Room {
@@ -228,7 +224,7 @@ class Room {
 
 // 服务层
 class GameServerFactoryService {
-    static Future<String> uploadGameCode(File jsFile, String name, String description)
+    static Future<String> uploadGameFile(File htmlFile, String name, String description, int maxPlayers)
     static Future<List<GameServerInstance>> fetchMyServers()
     static Future<void> stopServer(String serverId)
     static Future<void> deleteServer(String serverId)
@@ -258,18 +254,13 @@ class RoomProvider extends ChangeNotifier {
 ```json
 {
     "server_id": "user123_mygame_001",
-    "name": "我的第一个游戏",
-    "description": "一个简单的点击游戏",
+    "name": "我的第一个HTML游戏",
+    "description": "一个简单的HTML游戏",
     "status": "running",
     "container_id": "docker_container_abc123",
     "port": 8081,
     "created_at": "2025-12-17T10:00:00Z",
     "updated_at": "2025-12-17T10:30:00Z",
-    "resource_usage": {
-        "cpu_percent": 15.5,
-        "memory_mb": 128,
-        "network_io": "1.2MB"
-    },
     "logs": ["Server started on port 8081", "Game initialized"]
 }
 ```
@@ -281,23 +272,23 @@ class RoomProvider extends ChangeNotifier {
     "server_id": "localhost:8081",
     "ip": "localhost", 
     "port": 8081,
-    "name": "我的第一个游戏",
+    "name": "我的第一个HTML游戏",
     "max_players": 20,
     "current_players": 2,
     "metadata": {
         "created_by": "user123",
-        "game_type": "custom"
+        "game_type": "html"
     },
     "last_heartbeat": "2025-12-17T10:30:00Z",
     "uptime": 1800
 }
 ```
 
-### 代码上传请求模型
+### HTML游戏文件上传请求模型
 
 ```json
 {
-    "file": "multipart/form-data",
+    "file": "multipart/form-data (ZIP或HTML文件)",
     "name": "我的游戏",
     "description": "游戏描述",
     "max_players": 10
@@ -316,7 +307,6 @@ class GameServerInstance {
     final int port;               // 服务器端口
     final DateTime createdAt;     // 创建时间
     final DateTime updatedAt;     // 更新时间
-    final Map<String, dynamic> resourceUsage; // 资源使用情况
 }
 
 class Room {
@@ -335,124 +325,130 @@ class Room {
 ## 正确性属性
 
 *属性是一个特征或行为，应该在系统的所有有效执行中保持为真——本质上是关于系统应该做什么的正式声明。属性作为人类可读规范和机器可验证正确性保证之间的桥梁。*
-基于更新的需求文档中的验收标准，我将这些标准转换为可测试的正确性属性。新的架构引入了Game Server Factory组件，增加了代码上传、分析、容器管理等核心功能。
-
-### 属性反思
-
-在完成预工作分析后，我识别出了一些可以合并的冗余属性：
-
-- 属性1.1和4.1都涉及代码验证，可以合并为综合的代码验证属性
-- 属性1.3和1.4都涉及容器管理，可以合并为容器生命周期管理属性
-- 属性8.1、8.3和8.4都涉及错误处理，可以合并为统一的错误处理属性
 
 ### 正确性属性
 
-**属性 1: 代码上传和验证**
-*对于任何*上传的JavaScript文件，Game Server Factory应该验证文件格式、大小限制、语法和基本结构
-**验证需求: 1.1, 4.1**
+**属性 1: HTML游戏文件验证**
+*对于任何*上传的HTML游戏文件（ZIP或单个HTML），Game Server Factory应该验证文件格式、大小限制和文件完整性
+**验证需求: 1.1, 1.2, 4.1**
 
-**属性 2: 代码安全分析**
-*对于任何*JavaScript代码，Game Server Factory应该扫描潜在的恶意操作并在发现安全风险时拒绝代码
-**验证需求: 1.2, 4.2, 4.3**
+**属性 2: 文件验证错误处理**
+*对于任何*无效的HTML游戏文件，Game Server Factory应该返回详细的错误信息并拒绝上传
+**验证需求: 1.3, 4.3, 8.3**
 
 **属性 3: 容器创建和部署**
-*对于任何*通过安全检查的代码，Game Server Factory应该创建Docker容器并部署游戏服务器
-**验证需求: 1.3, 4.4**
+*对于任何*通过验证的HTML游戏文件，Game Server Factory应该创建Docker容器并部署游戏服务器
+**验证需求: 1.4, 4.4**
 
-**属性 4: 容器状态监控**
-*对于任何*创建的游戏服务器容器，Game Server Factory应该监控容器状态并记录启动日志
-**验证需求: 1.4**
-
-**属性 5: 自动服务器注册**
+**属性 4: 自动服务器注册**
 *对于任何*成功启动的游戏服务器容器，服务器应该自动向Matchmaker Service注册
 **验证需求: 1.5**
 
-**属性 6: 用户服务器列表管理**
+**属性 5: 用户服务器列表管理**
 *对于任何*用户创建的游戏服务器，客户端应该显示所有服务器及其状态信息
 **验证需求: 2.1**
 
-**属性 7: 容器生命周期控制**
+**属性 6: 容器生命周期控制**
 *对于任何*用户的停止或删除请求，Game Server Factory应该优雅关闭容器并清理相关资源
 **验证需求: 2.2, 2.3**
 
-**属性 8: 服务器详情显示**
-*对于任何*服务器详情查询，客户端应该显示容器状态、资源使用情况和运行日志
+**属性 7: 服务器详情显示**
+*对于任何*服务器详情查询，客户端应该显示容器状态和运行日志
 **验证需求: 2.4**
 
-**属性 9: 实时状态更新**
+**属性 8: 实时状态更新**
 *对于任何*服务器状态变化，客户端应该实时更新显示的状态信息
 **验证需求: 2.5**
 
-**属性 10: 房间列表查询**
+**属性 9: 房间列表查询**
 *对于任何*房间列表请求，Matchmaker Service应该返回所有活跃游戏服务器的信息
 **验证需求: 3.1**
 
-**属性 11: 房间信息显示完整性**
+**属性 10: 房间信息显示完整性**
 *对于任何*房间数据，客户端显示应该包含房间名称、当前玩家数、最大玩家数和服务器状态
 **验证需求: 3.2**
 
-**属性 12: WebSocket连接建立**
-*对于任何*房间选择操作，客户端应该建立WebSocket连接并接收当前游戏状态
+**属性 11: HTTP连接建立**
+*对于任何*房间选择操作，客户端应该建立HTTP连接并接收HTML游戏内容
 **验证需求: 3.3, 3.4**
 
-**属性 13: 游戏操作处理**
-*对于任何*玩家游戏操作，游戏服务器应该处理操作并广播状态更新给所有连接的客户端
-**验证需求: 3.5**
+**属性 12: 文件安全检查**
+*对于任何*HTML游戏文件，Game Server Factory应该检查文件是否包含恶意脚本或不安全的操作
+**验证需求: 4.2**
 
-**属性 14: 系统资源管理**
-*对于任何*系统资源状态，Game Server Factory应该管理闲置容器、限制资源使用并处理异常退出
-**验证需求: 5.3, 5.4, 5.5**
+**属性 13: 容器异常处理**
+*对于任何*容器运行异常，Game Server Factory应该自动终止容器并记录错误日志
+**验证需求: 4.5, 8.4**
 
-**属性 15: 定期清理机制**
+**属性 14: 定期清理机制**
 *对于任何*定期清理任务执行，Matchmaker Service应该检查服务器心跳状态并移除过期条目
 **验证需求: 5.1, 5.2**
 
-**属性 16: 健康检查和状态查询**
-*对于任何*健康检查或容器状态查询，服务应该返回详细的状态信息和资源使用情况
-**验证需求: 6.2, 6.3**
+**属性 15: 闲置容器管理**
+*对于任何*长时间无活动的容器，Game Server Factory应该自动停止闲置容器以节省资源
+**验证需求: 5.3**
 
-**属性 17: API错误响应格式**
+**属性 16: 资源限制**
+*对于任何*系统资源使用率过高的情况，Game Server Factory应该限制新容器的创建
+**验证需求: 5.4**
+
+**属性 17: 健康检查响应**
+*对于任何*健康检查请求，所有服务应该返回服务状态和基本统计信息
+**验证需求: 6.1**
+
+**属性 18: 容器状态查询**
+*对于任何*容器状态查询，Game Server Factory应该返回详细的容器运行信息
+**验证需求: 6.2**
+
+**属性 19: API错误响应格式**
 *对于任何*格式错误或不存在资源的API请求，服务应该返回详细的错误信息和适当的状态码
-**验证需求: 6.4, 6.5**
+**验证需求: 6.3, 6.4**
 
-**属性 18: 配置参数应用**
+**属性 20: 服务器日志检索**
+*对于任何*日志查询请求，Game Server Factory应该返回最近的容器日志
+**验证需求: 6.5**
+
+**属性 21: 配置参数应用**
 *对于任何*环境变量配置，所有服务应该正确读取并应用配置参数
 **验证需求: 7.3**
 
-**属性 19: 综合错误处理**
-*对于任何*系统错误、网络连接失败、代码分析失败或容器创建失败，系统应该记录详细错误信息并提供用户友好的错误消息
-**验证需求: 8.1, 8.2, 8.3, 8.4, 8.5**
+**属性 22: 网络连接恢复**
+*对于任何*网络连接失败，系统应该处理不同网络环境下的连接问题并尝试恢复
+**验证需求: 7.4**
+
+**属性 23: 综合错误处理**
+*对于任何*系统错误、网络连接失败或数据验证失败，系统应该记录详细错误信息并提供用户友好的错误消息
+**验证需求: 8.1, 8.2, 8.5**
 
 ## 错误处理
 
 ### 错误分类和处理策略
 
-#### 1. 网络错误
+#### 1. 文件上传错误
+- **文件格式错误**: 返回400错误，说明支持的格式（ZIP或HTML）
+- **文件过大**: 返回413错误，说明文件大小限制
+- **缺少index.html**: 返回400错误，说明需要index.html
+- **文件损坏**: 返回400错误，说明文件无法解析
+
+#### 2. 容器管理错误
+- **容器创建失败**: 记录错误日志，返回500错误，清理部分资源
+- **容器启动超时**: 返回504错误，自动清理容器
+- **容器异常退出**: 记录错误日志，通知用户
+
+#### 3. 网络错误
 - **连接超时**: 实施指数退避重试机制，最大重试3次
 - **连接拒绝**: 显示服务不可用消息，提供手动重试选项
 - **DNS解析失败**: 检查网络配置，提供网络诊断建议
 
-#### 2. API错误
+#### 4. API错误
 - **400 Bad Request**: 显示具体的参数验证错误信息
-- **401 Unauthorized**: 重定向到登录页面或刷新认证令牌
 - **404 Not Found**: 显示资源不存在消息，提供返回主页选项
-- **429 Too Many Requests**: 显示速率限制消息，建议稍后重试
 - **500 Internal Server Error**: 显示服务器错误消息，记录错误详情
-
-#### 3. WebSocket错误
-- **连接失败**: 尝试重新连接，显示连接状态
-- **消息发送失败**: 缓存消息并在连接恢复后重发
-- **协议错误**: 重新建立连接，记录协议错误详情
-
-#### 4. 客户端错误
-- **内存不足**: 清理缓存数据，优化内存使用
-- **存储空间不足**: 清理临时文件，提示用户释放空间
-- **权限不足**: 引导用户授予必要权限
 
 ### 错误恢复机制
 
 ```python
-# 撮合服务错误处理示例
+# 游戏服务器工厂错误处理示例
 @app.exception_handler(HTTPException)
 async def http_exception_handler(request: Request, exc: HTTPException):
     logger.error(f"HTTP error: {exc.status_code} - {exc.detail}")
@@ -508,7 +504,7 @@ class ApiService {
 
 ### 测试框架和工具
 
-#### Python (撮合服务)
+#### Python (游戏服务器工厂和撮合服务)
 - **单元测试**: pytest, pytest-asyncio
 - **属性测试**: Hypothesis
 - **API测试**: httpx, FastAPI TestClient
@@ -517,7 +513,7 @@ class ApiService {
 #### Node.js (游戏服务器)
 - **单元测试**: Jest
 - **属性测试**: fast-check
-- **WebSocket测试**: socket.io-client
+- **HTTP测试**: supertest
 - **覆盖率**: Istanbul/nyc
 
 #### Flutter (客户端)
@@ -533,9 +529,9 @@ class ApiService {
 
 示例：
 ```python
-def test_server_registration_validation():
+def test_html_game_file_validation():
     """
-    **Feature: ai-game-platform, Property 1: 服务器注册和验证**
+    **Feature: ai-game-platform, Property 1: HTML游戏文件验证**
     """
     # 测试实现
 ```
@@ -543,12 +539,13 @@ def test_server_registration_validation():
 ### 测试数据生成策略
 
 #### 智能生成器设计
+- **HTML文件生成器**: 生成有效和无效的HTML/ZIP文件
 - **服务器信息生成器**: 生成有效和无效的IP地址、端口范围、服务器名称
 - **心跳数据生成器**: 生成不同时间戳和玩家数量的心跳数据
-- **WebSocket消息生成器**: 生成各种游戏操作和状态更新消息
 - **错误场景生成器**: 生成网络错误、超时和格式错误的请求
 
 #### 边界值测试
+- 文件大小：0字节到最大限制
 - 端口范围：1-65535
 - 玩家数量：0到最大值
 - 字符串长度：空字符串到最大长度
