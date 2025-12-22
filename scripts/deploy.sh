@@ -5,29 +5,19 @@
 
 set -e
 
-# 颜色定义
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-BLUE='\033[0;34m'
-NC='\033[0m' # No Color
+# 获取脚本目录
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-# 日志函数
-log_info() {
-    echo -e "${BLUE}[INFO]${NC} $1"
-}
+# 加载通用函数库
+source "$SCRIPT_DIR/common.sh"
 
-log_success() {
-    echo -e "${GREEN}[SUCCESS]${NC} $1"
-}
+# 自动检测 Docker Compose 命令
+DOCKER_COMPOSE=$(get_docker_compose_cmd)
+if [ $? -ne 0 ]; then
+    exit 1
+fi
 
-log_warning() {
-    echo -e "${YELLOW}[WARNING]${NC} $1"
-}
-
-log_error() {
-    echo -e "${RED}[ERROR]${NC} $1"
-}
+log_info "使用 Docker Compose 命令: $DOCKER_COMPOSE"
 
 # 检查依赖
 check_dependencies() {
@@ -36,18 +26,15 @@ check_dependencies() {
     # 检查Docker
     if ! command -v docker &> /dev/null; then
         log_error "Docker未安装，请先安装Docker"
+        log_info "  macOS: brew install --cask docker"
+        log_info "  Linux: 参考 https://docs.docker.com/engine/install/"
         exit 1
     fi
     
-    # 检查Docker Compose
-    if ! command -v docker-compose &> /dev/null; then
-        log_error "Docker Compose未安装，请先安装Docker Compose"
-        exit 1
-    fi
+    # Docker Compose 已在脚本开头检测
     
     # 检查Docker守护进程
-    if ! docker info &> /dev/null; then
-        log_error "Docker守护进程未运行，请启动Docker"
+    if ! check_docker_running; then
         exit 1
     fi
     
@@ -107,15 +94,15 @@ build_images() {
     
     # 构建撮合服务
     log_info "构建撮合服务镜像..."
-    docker-compose build matchmaker
+    $DOCKER_COMPOSE build matchmaker
     
     # 构建游戏服务器工厂
     log_info "构建游戏服务器工厂镜像..."
-    docker-compose build game-server-factory
+    $DOCKER_COMPOSE build game-server-factory
     
     # 构建游戏服务器模板
     log_info "构建游戏服务器模板镜像..."
-    docker-compose build example-game-server
+    $DOCKER_COMPOSE build example-game-server
     
     log_success "所有镜像构建完成"
 }
@@ -128,9 +115,9 @@ start_services() {
     
     if [ -n "$profile" ]; then
         log_info "使用配置文件: $profile"
-        docker-compose --profile "$profile" up -d
+        $DOCKER_COMPOSE --profile "$profile" up -d
     else
-        docker-compose up -d
+        $DOCKER_COMPOSE up -d
     fi
     
     log_success "服务启动完成"
@@ -209,7 +196,7 @@ health_check() {
 # 显示服务状态
 show_status() {
     log_info "服务状态:"
-    docker-compose ps
+    $DOCKER_COMPOSE ps
     
     echo ""
     log_info "服务端点:"
@@ -228,7 +215,7 @@ cleanup() {
     log_info "清理资源..."
     
     # 停止服务
-    docker-compose down
+    $DOCKER_COMPOSE down
     
     # 清理未使用的镜像
     docker image prune -f
@@ -266,12 +253,12 @@ main() {
             ;;
         "stop")
             log_info "停止服务..."
-            docker-compose down
+            $DOCKER_COMPOSE down
             log_success "服务已停止"
             ;;
         "restart")
             log_info "重启服务..."
-            docker-compose restart
+            $DOCKER_COMPOSE restart
             wait_for_services
             health_check
             show_status
@@ -286,7 +273,7 @@ main() {
             cleanup
             ;;
         "logs")
-            docker-compose logs -f
+            $DOCKER_COMPOSE logs -f
             ;;
         *)
             echo "用法: $0 {deploy|start|stop|restart|status|health|cleanup|logs} [profile]"

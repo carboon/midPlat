@@ -290,22 +290,38 @@ validate_port_conflicts() {
 validate_docker_compose_config() {
     log_info "验证Docker Compose配置..."
     
-    if ! command -v docker-compose &> /dev/null; then
-        log_error "docker-compose 未安装"
+    # 检测可用的 Docker Compose 命令（兼容新旧版本）
+    local docker_compose_cmd=""
+    
+    if command -v docker &> /dev/null && docker compose version &> /dev/null 2>&1; then
+        docker_compose_cmd="docker compose"
+        log_info "检测到 Docker Compose (新版本): docker compose"
+    elif command -v docker-compose &> /dev/null; then
+        docker_compose_cmd="docker-compose"
+        log_info "检测到 Docker Compose (旧版本): docker-compose"
+    else
+        log_error "Docker Compose 未安装"
+        log_info "请安装 Docker Desktop 或独立的 docker-compose"
+        log_info "  macOS: brew install --cask docker"
+        log_info "  Linux: sudo apt-get install docker-compose-plugin"
         return 1
     fi
     
+    log_success "Docker Compose 可用: $docker_compose_cmd"
+    
     # 验证配置文件语法
-    if docker-compose config --quiet; then
+    if $docker_compose_cmd config --quiet 2>/dev/null; then
         log_success "Docker Compose配置语法正确"
     else
         log_error "Docker Compose配置语法错误"
+        log_info "运行以下命令查看详细错误:"
+        log_info "  $docker_compose_cmd config"
         return 1
     fi
     
     # 检查服务定义
     local services
-    services=$(docker-compose config --services)
+    services=$($docker_compose_cmd config --services 2>/dev/null)
     
     local expected_services=("matchmaker" "game-server-factory")
     local missing_services=()

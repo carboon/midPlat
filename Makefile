@@ -11,6 +11,15 @@ COMPOSE_FILE := docker-compose.yml
 COMPOSE_PROD_FILE := docker-compose.prod.yml
 ENV_FILE := .env
 
+# 自动检测 docker-compose 命令（兼容旧版和新版）
+# 优先使用 'docker compose'（Docker Desktop/新版），回退到 'docker-compose'（旧版）
+DOCKER_COMPOSE := $(shell if command -v docker >/dev/null 2>&1 && docker compose version >/dev/null 2>&1; then echo "docker compose"; elif command -v docker-compose >/dev/null 2>&1; then echo "docker-compose"; else echo ""; fi)
+
+# 检查 docker-compose 是否可用
+ifeq ($(DOCKER_COMPOSE),)
+$(error Docker Compose 未安装。请安装 Docker Desktop 或独立的 docker-compose)
+endif
+
 # 颜色定义
 BLUE := \033[0;34m
 GREEN := \033[0;32m
@@ -21,6 +30,8 @@ NC := \033[0m # No Color
 # 帮助信息
 help: ## 显示帮助信息
 	@echo "$(BLUE)AI游戏平台部署管理$(NC)"
+	@echo ""
+	@echo "$(GREEN)Docker Compose 命令:$(NC) $(DOCKER_COMPOSE)"
 	@echo ""
 	@echo "$(GREEN)可用命令:$(NC)"
 	@awk 'BEGIN {FS = ":.*?## "} /^[a-zA-Z_-]+:.*?## / {printf "  $(YELLOW)%-15s$(NC) %s\n", $$1, $$2}' $(MAKEFILE_LIST)
@@ -85,33 +96,33 @@ deploy-prod: setup build ## 生产环境部署
 		echo "$(RED)错误: .env 文件不存在$(NC)"; \
 		exit 1; \
 	fi
-	@docker-compose -f $(COMPOSE_FILE) -f $(COMPOSE_PROD_FILE) up -d
+	@$(DOCKER_COMPOSE) -f $(COMPOSE_FILE) -f $(COMPOSE_PROD_FILE) up -d
 	@echo "$(GREEN)生产环境部署完成$(NC)"
 
 # 启动服务
 start: ## 启动所有服务
 	@echo "$(BLUE)启动服务...$(NC)"
-	@docker-compose up -d
+	@$(DOCKER_COMPOSE) up -d
 	@./scripts/deploy.sh start
 	@echo "$(GREEN)服务启动完成$(NC)"
 
 # 停止服务
 stop: ## 停止所有服务
 	@echo "$(BLUE)停止服务...$(NC)"
-	@docker-compose down
+	@$(DOCKER_COMPOSE) down
 	@echo "$(GREEN)服务已停止$(NC)"
 
 # 重启服务
 restart: ## 重启所有服务
 	@echo "$(BLUE)重启服务...$(NC)"
-	@docker-compose restart
+	@$(DOCKER_COMPOSE) restart
 	@./scripts/health-check.sh quick
 	@echo "$(GREEN)服务重启完成$(NC)"
 
 # 查看状态
 status: ## 查看服务状态
 	@echo "$(BLUE)服务状态:$(NC)"
-	@docker-compose ps
+	@$(DOCKER_COMPOSE) ps
 	@echo ""
 	@./scripts/health-check.sh quick
 
@@ -131,17 +142,17 @@ monitor: ## 启动监控模式
 
 # 查看日志
 logs: ## 查看所有服务日志
-	@docker-compose logs -f
+	@$(DOCKER_COMPOSE) logs -f
 
 # 查看特定服务日志
 logs-matchmaker: ## 查看撮合服务日志
-	@docker-compose logs -f matchmaker
+	@$(DOCKER_COMPOSE) logs -f matchmaker
 
 logs-factory: ## 查看游戏服务器工厂日志
-	@docker-compose logs -f game-server-factory
+	@$(DOCKER_COMPOSE) logs -f game-server-factory
 
 logs-example: ## 查看示例游戏服务器日志
-	@docker-compose logs -f example-game-server
+	@$(DOCKER_COMPOSE) logs -f example-game-server
 
 # 验证部署
 validate: ## 验证部署配置和功能
@@ -187,7 +198,7 @@ test-e2e: ## 运行端到端测试
 # 清理
 clean: ## 清理所有资源
 	@echo "$(BLUE)清理资源...$(NC)"
-	@docker-compose down -v
+	@$(DOCKER_COMPOSE) down -v
 	@docker system prune -f
 	@docker volume prune -f
 	@./scripts/setup-network.sh cleanup
@@ -196,7 +207,7 @@ clean: ## 清理所有资源
 # 深度清理
 clean-all: ## 深度清理（包括镜像）
 	@echo "$(BLUE)深度清理...$(NC)"
-	@docker-compose down -v --rmi all
+	@$(DOCKER_COMPOSE) down -v --rmi all
 	@docker system prune -a -f
 	@docker volume prune -f
 	@./scripts/setup-network.sh cleanup
@@ -214,8 +225,8 @@ backup: ## 备份配置和数据
 # 更新
 update: ## 更新服务镜像
 	@echo "$(BLUE)更新服务镜像...$(NC)"
-	@docker-compose pull
-	@docker-compose up -d
+	@$(DOCKER_COMPOSE) pull
+	@$(DOCKER_COMPOSE) up -d
 	@./scripts/health-check.sh quick
 	@echo "$(GREEN)更新完成$(NC)"
 
@@ -254,13 +265,13 @@ report: ## 生成系统报告
 # 调试模式
 debug: ## 启动调试模式
 	@echo "$(BLUE)启动调试模式...$(NC)"
-	@docker-compose -f $(COMPOSE_FILE) -f docker-compose.debug.yml up -d
+	@$(DOCKER_COMPOSE) -f $(COMPOSE_FILE) -f docker-compose.debug.yml up -d
 	@echo "$(GREEN)调试模式启动完成$(NC)"
 
 # 配置检查
 config-check: ## 检查配置文件
 	@echo "$(BLUE)检查配置文件...$(NC)"
-	@docker-compose config
+	@$(DOCKER_COMPOSE) config
 	@echo "$(GREEN)配置文件检查完成$(NC)"
 
 # 端口检查

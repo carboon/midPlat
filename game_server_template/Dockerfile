@@ -1,6 +1,5 @@
 # 使用官方 Node.js 运行时作为基础镜像
-FROM node:16-alpine
-
+FROM docker.io/library/node:18-alpine
 # 设置工作目录
 WORKDIR /usr/src/app
 

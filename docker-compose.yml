@@ -92,7 +92,9 @@ services:
     cap_add:
       - NET_ADMIN
 
-  # 示例游戏服务器（可选）
+  # 示例游戏服务器（可选 - 仅用于演示和测试）
+  # 注意: 生产环境中，游戏服务器由 game-server-factory 动态创建
+  # 此服务仅作为参考实现和系统测试使用
   example-game-server:
     build: ./game_server_template
     ports:
